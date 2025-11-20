@@ -7,8 +7,104 @@
 // If ImgBB rejects due to size, Worker returns clear error asking client-side resize.
 // Server-side resize requires extra WASM lib or R2/Images service and is not included here.
 
+// CORS Headers FIX
+function corsHeaders() {
+  return {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    "Access-Control-Max-Age": "86400",
+  };
+}
+
+// Handle preflight
+function handleOptions(request) {
+  if (request.headers.get("Origin") !== null &&
+      request.headers.get("Access-Control-Request-Method") !== null) {
+    // Preflight request
+    return new Response(null, {
+      headers: corsHeaders(),
+    });
+  } else {
+    // Simple OPTIONS request
+    return new Response(null, {
+      headers: {
+        "Allow": "GET, HEAD, POST, OPTIONS",
+      }
+    });
+  }
+}
 export default {
   async fetch(request, env) {
+
+    // OPTIONS = Preflight
+    if (request.method === "OPTIONS") {
+      return handleOptions(request);
+    }
+
+    const url = new URL(request.url);
+    const path = url.pathname;
+
+    // === TEST ROUTE ===
+    if (path === "/__test") {
+      return new Response(JSON.stringify({
+        ok: true,
+        message: "API Online & CORS OK",
+        time: Date.now()
+      }), {
+        headers: {
+          "Content-Type": "application/json",
+          ...corsHeaders()
+        }
+      });
+    }
+
+    // === LETAKKAN ROUTE API ANDA DI SINI ===
+    // Contoh:
+    if (path === "/login" && request.method === "POST") {
+      try {
+        const body = await request.json();
+        const username = body.username;
+        const password = body.password;
+
+        return new Response(JSON.stringify({
+          ok: true,
+          user: username
+        }), {
+          headers: {
+            "Content-Type": "application/json",
+            ...corsHeaders()
+          }
+        });
+
+      } catch (e) {
+        return new Response(JSON.stringify({
+          ok: false,
+          error: e.toString(),
+        }), {
+          headers: {
+            "Content-Type": "application/json",
+            ...corsHeaders()
+          },
+          status: 500
+        });
+      }
+    }
+
+    // Default 404
+    return new Response(JSON.stringify({
+      ok: false,
+      error: "not found",
+      path
+    }), {
+      status: 404,
+      headers: {
+        "Content-Type": "application/json",
+        ...corsHeaders()
+      }
+    });
+  }
+};
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/+$/, '');
     const method = request.method.toUpperCase();
