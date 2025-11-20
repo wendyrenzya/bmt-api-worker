@@ -8,4 +8,5 @@ IMG_BB_KEY = "bf028c007711aefd71fdb56a932f7b74"
 [[d1_databases]]
 binding = "BMT_DB"
 database_name = "bmt_db"
-database_id = "969fef5e-d7a3-4f58-979b-xxxxxxxxxxxx"
+database_id = "969fef5e-d7a3-4f58-979b-dbef1f085580"
+database_type = "d1"
