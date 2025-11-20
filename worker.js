@@ -1,502 +1,216 @@
-// worker.js — Big Motor API (FINAL with ImgBB profile upload)
-// Bindings required (in Cloudflare Worker settings / wrangler.toml):
-// - D1 binding named "DB" (env.DB)
-// - Environment variable: IMGBB_KEY (ImgBB API key string)
-//
-// Important: For profile upload, Worker will POST base64 to ImgBB.
-// If ImgBB rejects due to size, Worker returns clear error asking client-side resize.
-// Server-side resize requires extra WASM lib or R2/Images service and is not included here.
+/**
+ * worker.js
+ * Minimal Cloudflare Worker API for BMT tester
+ *
+ * Expected bindings:
+ * - BMT_DB   : D1 database binding
+ * - IMG_BB_KEY (optional) : API key for imgbb (if you want image upload)
+ *
+ * Routes:
+ * GET  /                -> health
+ * POST /login           -> body { username, password }
+ * GET  /barang          -> list barang (SELECT * FROM barang)
+ * POST /upload          -> multipart/form-data or JSON { imageBase64 } -> uploads to imgbb if IMG_BB_KEY present
+ *
+ * CORS: permissive for tester pages (adjust origin if you want).
+ */
 
-// CORS Headers FIX
+const DOMAIN_SUFFIX = "@bigmotor.biz.id";
 
-function corsHeaders() {
+// CORS headers (permissive for testing)
+function corsHeaders(request) {
+  const origin = request.headers.get("Origin") || "*";
   return {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
-    "Access-Control-Max-Age": "86400",
+    "Access-Control-Allow-Origin": origin === "null" ? "*" : origin,
+    "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type,Authorization",
+    "Access-Control-Allow-Credentials": "true",
   };
 }
 
-// Handle preflight
-function handleOptions(request) {
-  if (request.headers.get("Origin") !== null &&
-      request.headers.get("Access-Control-Request-Method") !== null) {
-    // Preflight request
-    return new Response(null, {
-      headers: corsHeaders(),
-    });
-  } else {
-    // Simple OPTIONS request
-    return new Response(null, {
-      headers: {
-        "Allow": "GET, HEAD, POST, OPTIONS",
-      }
-    });
-  }
+function jsonResponse(data, status = 200, request = null) {
+  const headers = {
+    ...((request && corsHeaders(request)) || { "Access-Control-Allow-Origin": "*" }),
+    "Content-Type": "application/json; charset=utf-8",
+  };
+  return new Response(JSON.stringify(data, null, 2), { status, headers });
 }
+
+function textResponse(text, status = 200, request = null) {
+  const headers = {
+    ...((request && corsHeaders(request)) || { "Access-Control-Allow-Origin": "*" }),
+    "Content-Type": "text/plain; charset=utf-8",
+  };
+  return new Response(text, { status, headers });
+}
+
+async function handleOptions(request) {
+  // reply to preflight quickly
+  return new Response(null, { status: 204, headers: corsHeaders(request) });
+}
+
+function ensureUsernameSuffix(username) {
+  if (!username) return username;
+  if (username.includes("@")) return username; // assume full
+  return username + DOMAIN_SUFFIX;
+}
+
+function makeToken() {
+  // simple random token (not jwt). Good enough for tester.
+  return (
+    Date.now().toString(36) +
+    "-" +
+    Math.random().toString(36).slice(2, 10)
+  );
+}
+
+/** Helper: run paramaterized D1 SQL and return rows */
+async function d1Query(env, sql, params = []) {
+  // env.BMT_DB must exist
+  if (!env.BMT_DB) throw new Error("D1 binding 'BMT_DB' not found in environment");
+  const res = await env.BMT_DB.prepare(sql).bind(...params).all();
+  // .all() returns { results: [ ... ] } depending on runtime; handle both forms
+  if (res && Array.isArray(res.results)) return res.results;
+  if (res && Array.isArray(res)) return res;
+  // fallback
+  return res;
+}
+
+/** ROUTES */
 export default {
-  async fetch(request, env) {
-
-    // OPTIONS = Preflight
-    if (request.method === "OPTIONS") {
-      return handleOptions(request);
-    }
-
-    const url = new URL(request.url);
-    const path = url.pathname;
-
-    // === TEST ROUTE ===
-    if (path === "/__test") {
-      return new Response(JSON.stringify({
-        ok: true,
-        message: "API Online & CORS OK",
-        time: Date.now()
-      }), {
-        headers: {
-          "Content-Type": "application/json",
-          ...corsHeaders()
-        }
-      });
-    }
-
-    // === LETAKKAN ROUTE API ANDA DI SINI ===
-    // Contoh:
-    if (path === "/login" && request.method === "POST") {
-      try {
-        const body = await request.json();
-        const username = body.username;
-        const password = body.password;
-
-        return new Response(JSON.stringify({
-          ok: true,
-          user: username
-        }), {
-          headers: {
-            "Content-Type": "application/json",
-            ...corsHeaders()
-          }
-        });
-
-      } catch (e) {
-        return new Response(JSON.stringify({
-          ok: false,
-          error: e.toString(),
-        }), {
-          headers: {
-            "Content-Type": "application/json",
-            ...corsHeaders()
-          },
-          status: 500
-        });
-      }
-    }
-
-    // Default 404
-    return new Response(JSON.stringify({
-      ok: false,
-      error: "not found",
-      path
-    }), {
-      status: 404,
-      headers: {
-        "Content-Type": "application/json",
-        ...corsHeaders()
-      }
-    });
-  }
-};
-    const url = new URL(request.url);
-    const path = url.pathname.replace(/\/+$/, '');
-    const method = request.method.toUpperCase();
-
-    // --- small helpers
-    const json = (obj, status = 200) =>
-      new Response(JSON.stringify(obj, null, 2), {
-        status,
-        headers: { 'Content-Type': 'application/json; charset=utf-8' },
-      });
-    const text = (t, status = 200) =>
-      new Response(String(t), { status, headers: { 'Content-Type': 'text/plain' } });
-    const safeJson = async (req) => { try { return await req.json(); } catch { return null; } };
-    const getHeaderUser = (req) => req.headers.get('X-User') || req.headers.get('x-user') || null;
-
-    // --- D1 helpers
-    const dbAll = async (sql, ...binds) => (await env.DB.prepare(sql).bind(...binds).all());
-    const dbFirst = async (sql, ...binds) => (await env.DB.prepare(sql).bind(...binds).first());
-    const dbRun = async (sql, ...binds) => (await env.DB.prepare(sql).bind(...binds).run());
-
-    // --- user helpers
-    const getUserRecord = async (username) => {
-      if (!username) return null;
-      return await dbFirst('SELECT username,name,role,photo_url,created_at FROM users WHERE username = ?', username);
-    };
-    const checkRole = async (username, allowed = []) => {
-      const user = await getUserRecord(username);
-      if (!user) return { ok: false, code: 401, msg: 'User not found or X-User missing' };
-      if (allowed.length === 0) return { ok: true, user };
-      if (!allowed.includes(user.role)) return { ok: false, code: 403, msg: 'Anda tidak memiliki akses, silahkan contact owner', user };
-      return { ok: true, user };
-    };
-
-    // --- DuckDuckGo image fetch (i.js)
-    async function fetchDuckImages(query, limit = 8) {
-      try {
-        if (!query) return [];
-        const endpoint = `https://duckduckgo.com/i.js?q=${encodeURIComponent(query)}`;
-        for (let attempt = 0; attempt < 3; attempt++) {
-          try {
-            const res = await fetch(endpoint, {
-              headers: {
-                'Accept': 'application/json',
-                'User-Agent': 'Mozilla/5.0 (compatible; BMTBot/1.0)',
-                'Referer': 'https://duckduckgo.com/'
-              },
-              cf: { cacheTtl: 60, cacheEverything: true }
-            });
-            if (!res.ok) continue;
-            const data = await res.json();
-            if (!data || !Array.isArray(data.results)) continue;
-            const imgs = data.results.map(r => r.image).filter(Boolean);
-            const out = []; const seen = new Set();
-            for (const u of imgs) {
-              if (!u) continue;
-              if (seen.has(u)) continue;
-              seen.add(u);
-              out.push(u);
-              if (out.length >= limit) break;
-            }
-            return out;
-          } catch (err) {
-            await new Promise(r => setTimeout(r, 250));
-            continue;
-          }
-        }
-        return [];
-      } catch (err) {
-        return [];
-      }
-    }
-
-    // --- ImgBB upload helper
-    // Accepts raw base64 string (no data: prefix) or data URI; returns { ok, url, rawResponse }
-    async function uploadToImgBB(apiKey, base64OrDataURI, name = 'profile') {
-      if (!apiKey) return { ok: false, error: 'IMGBB_KEY not configured' };
-      try {
-        // normalize: if starts with data:, strip prefix
-        let raw = base64OrDataURI;
-        if (raw.startsWith('data:')) {
-          const idx = raw.indexOf(',');
-          if (idx !== -1) raw = raw.slice(idx + 1);
-        }
-        // safety: limit size server-side (reject > 6MB to avoid huge payload)
-        const approxBytes = Math.round((raw.length * 3) / 4);
-        if (approxBytes > 6 * 1024 * 1024) {
-          return { ok: false, error: 'image_too_large_server' };
-        }
-
-        const form = new URLSearchParams();
-        form.append('key', apiKey);
-        form.append('image', raw);
-        form.append('name', name);
-
-        const res = await fetch('https://api.imgbb.com/1/upload', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: form.toString(),
-        });
-
-        const data = await res.json();
-        if (!res.ok || !data || !data.success) {
-          // pass back ImgBB message if available
-          return { ok: false, error: 'imgbb_error', detail: data };
-        }
-        return { ok: true, url: data.data.url, raw: data };
-      } catch (err) {
-        return { ok: false, error: String(err) };
-      }
-    }
-
-    const parts = path.split('/').filter(Boolean);
-
+  async fetch(request, env, ctx) {
     try {
-      // --- Health
-      if ((path === '' || path === '/') && method === 'GET') {
-        return json({ status: 'ok', message: 'BMT API Worker running' });
+      const url = new URL(request.url);
+      const path = url.pathname.replace(/\/+$/, "") || "/"; // normalize trailing slash
+      console.log(`[worker] ${request.method} ${path}`);
+
+      if (request.method === "OPTIONS") return handleOptions(request);
+
+      // Root / health
+      if (request.method === "GET" && path === "/") {
+        return jsonResponse({ status: "ok", message: "BMT API Worker running" }, 200, request);
       }
 
-      // --- AUTH
-      if (path === '/auth/login' && method === 'POST') {
-        const body = await safeJson(request);
-        if (!body?.username || !body?.password) return json({ ok: false, error: 'username & password required' }, 400);
-        const row = await dbFirst('SELECT username,name,role,photo_url,password FROM users WHERE username = ?', body.username);
-        if (!row || row.password !== body.password) return json({ ok: false, error: 'invalid credentials' }, 401);
-        const { password: _, ...user } = row;
-        return json({ ok: true, ...user });
-      }
-      if (path === '/auth/me' && method === 'GET') {
-        const u = getHeaderUser(request); if (!u) return json({ ok: false, error: 'X-User header required' }, 401);
-        const rec = await getUserRecord(u); if (!rec) return json({ ok: false, error: 'user not found' }, 404);
-        return json({ ok: true, user: rec });
-      }
-
-      // --- USERS (list/create/edit/delete)
-      if (path === '/users' && method === 'GET') {
-        const perm = await checkRole(getHeaderUser(request), ['owner','admin']);
-        if (!perm.ok) return json({ ok: false, error: perm.msg }, perm.code);
-        const r = await dbAll('SELECT username,name,role,photo_url,created_at FROM users ORDER BY created_at DESC');
-        return json({ ok: true, results: r.results || [] });
-      }
-
-      if (path === '/users' && method === 'POST') {
-        const body = await safeJson(request);
-        if (!body?.username || !body?.password || !body?.name) return json({ ok: false, error: 'username,password,name required' }, 400);
-        const cnt = await dbFirst('SELECT COUNT(*) AS c FROM users'); const c = (cnt?.c||0);
-        if (c === 0) {
-          await dbRun('INSERT INTO users (username,password,name,role,photo_url) VALUES (?,?,?,?,?)',
-            body.username, body.password, body.name, 'owner', body.photo_url || '');
-          return json({ ok: true, message: 'owner created (bootstrap)' }, 201);
-        }
-        const perm = await checkRole(getHeaderUser(request), ['owner']); if (!perm.ok) return json({ ok: false, error: perm.msg }, perm.code);
-        await dbRun('INSERT INTO users (username,password,name,role,photo_url) VALUES (?,?,?,?,?)',
-          body.username, body.password, body.name, body.role || 'mekanik', body.photo_url || '');
-        return json({ ok: true, message: 'user created' }, 201);
-      }
-
-      if (parts[0] === 'users' && parts[1] && ['PUT','PATCH'].includes(method)) {
-        const target = decodeURIComponent(parts[1]); const caller = getHeaderUser(request); if (!caller) return json({ ok: false, error: 'X-User required' }, 401);
-        const callerRec = await getUserRecord(caller); if (!callerRec) return json({ ok: false, error: 'caller not found' }, 401);
-        if (callerRec.role !== 'owner' && caller !== target) return json({ ok: false, error: 'forbidden' }, 403);
-        const body = await safeJson(request); if (!body) return json({ ok: false, error: 'body required' }, 400);
-        const fields = []; const bind = [];
-        if (body.password) { fields.push('password=?'); bind.push(body.password); }
-        if (body.name) { fields.push('name=?'); bind.push(body.name); }
-        if (body.photo_url) { fields.push('photo_url=?'); bind.push(body.photo_url); }
-        if (body.role && callerRec.role === 'owner') { fields.push('role=?'); bind.push(body.role); }
-        if (!fields.length) return json({ ok: false, error: 'nothing to update' }, 400);
-        bind.push(target);
-        await dbRun(`UPDATE users SET ${fields.join(',')}, updated_at=CURRENT_TIMESTAMP WHERE username = ?`, ...bind);
-        return json({ ok: true, message: 'updated' });
-      }
-
-      if (parts[0] === 'users' && parts[1] && method === 'DELETE') {
-        const perm = await checkRole(getHeaderUser(request), ['owner']); if (!perm.ok) return json({ ok: false, error: perm.msg }, perm.code);
-        await dbRun('DELETE FROM users WHERE username = ?', parts[1]);
-        return json({ ok: true, message: 'deleted' });
-      }
-
-      // --- PROFILE PHOTO UPLOAD (ImgBB) ---
-      // POST /users/upload_photo
-      if (path === '/users/upload_photo' && method === 'POST') {
-        const caller = getHeaderUser(request);
-        if (!caller) return json({ ok: false, error: 'X-User header required' }, 401);
-        const body = await safeJson(request);
-        if (!body || !body.image) return json({ ok: false, error: 'image (base64 or dataURI) required' }, 400);
-
-        // Ensure user exists
-        const userRec = await dbFirst('SELECT username FROM users WHERE username = ?', caller);
-        if (!userRec) return json({ ok: false, error: 'user not found' }, 404);
-
-        // Normalize base64 and approximate size
-        let raw = body.image;
-        if (raw.startsWith('data:')) {
-          const idx = raw.indexOf(','); if (idx !== -1) raw = raw.slice(idx + 1);
-        }
-        // compute approx bytes
-        const approxBytes = Math.round((raw.length * 3) / 4);
-        // limit hard cap 6MB
-        if (approxBytes > 6 * 1024 * 1024) return json({ ok: false, error: 'Image too large (limit 6MB)' }, 413);
-
-        // If >100KB, we will still attempt to upload to ImgBB; if ImgBB fail due to size, client must resize
-        const maxClientBytes = 100 * 1024;
-        const attemptResizeOnServer = false; // we cannot reliably resize server-side without WASM or R2 Images
-
-        // Upload to ImgBB
-        const imgbbKey = env.IMGBB_KEY || null;
-        const name = `${caller}_${Date.now()}`;
-        const up = await uploadToImgBB(imgbbKey, raw, name);
-
-        if (!up.ok) {
-          // If imgbb_error and approxBytes > 100KB, tell client to resize. Otherwise return error detail.
-          if (up.error === 'imgbb_error' && approxBytes > maxClientBytes) {
-            return json({ ok: false, error: 'image_too_large', message: 'Upload failed — image likely too large. Please resize client-side to <=100KB and retry.' }, 413);
-          }
-          return json({ ok: false, error: up.error || 'upload_failed', detail: up.detail || up.raw || null }, 500);
-        }
-
-        // Save URL to DB
-        try {
-          await dbRun('UPDATE users SET photo_url = ?, updated_at=CURRENT_TIMESTAMP WHERE username = ?', up.url, caller);
-        } catch (err) {
-          // even if DB update fails, return URL so client can still use it
-          return json({ ok: true, url: up.url, warning: 'img_uploaded_but_db_update_failed', db_error: String(err) });
-        }
-
-        return json({ ok: true, url: up.url });
-      }
-
-      // --- BARANG (list, single, fetch_image, create, edit, delete) ---
-      if (path === '/barang' && method === 'GET') {
-        const params = Object.fromEntries(url.searchParams.entries());
-        const limit = Number(params.limit || 100); const offset = Number(params.offset || 0); const q = params.q || null;
-        let sql = 'SELECT id,kode_barang,nama,harga,harga_modal,stock,kategori,foto,deskripsi,created_at,updated_at FROM barang';
-        const binds = [];
-        if (q) { sql += ' WHERE nama LIKE ? OR kode_barang LIKE ?'; const like = `%${q}%`; binds.push(like, like); }
-        sql += ' ORDER BY id DESC LIMIT ? OFFSET ?'; binds.push(limit, offset);
-        const r = await dbAll(sql, ...binds);
-        return json({ ok: true, results: r.results || [] });
-      }
-
-      if (parts[0] === 'barang' && parts[1] && method === 'GET') {
-        const id = Number(parts[1]); const r = await dbFirst('SELECT * FROM barang WHERE id = ?', id);
-        if (!r) return json({ ok: false, error: 'not found' }, 404);
-        return json({ ok: true, result: r });
-      }
-
-      if (path === '/barang/fetch_image' && method === 'GET') {
-        const params = Object.fromEntries(url.searchParams.entries());
-        const q = params.query || params.q || null;
-        if (!q) return json({ ok: false, images: [], error: 'query required' }, 400);
-        const imgs = await fetchDuckImages(q, 8);
-        return json({ ok: true, images: imgs });
-      }
-
-      if (path === '/barang' && method === 'POST') {
-        const perm = await checkRole(getHeaderUser(request), ['owner','admin']); if (!perm.ok) return json({ ok: false, error: perm.msg }, perm.code);
-        const body = await safeJson(request); if (!body || !body.nama) return json({ ok: false, error: 'nama required' }, 400);
-
-        // auto-fetch first image if foto empty
-        let fotoUrl = body.foto && String(body.foto).trim();
-        if (!fotoUrl) {
-          const imgs = await fetchDuckImages(body.nama, 1);
-          if (imgs.length > 0) fotoUrl = imgs[0];
-        }
-
-        const res = await dbRun(
-          `INSERT INTO barang (kode_barang,nama,harga,harga_modal,stock,kategori,foto,deskripsi) VALUES (?,?,?,?,?,?,?,?)`,
-          body.kode_barang || '', body.nama, Number(body.harga || 0), Number(body.harga_modal || 0), Number(body.stock || 0),
-          body.kategori || '', fotoUrl || '', body.deskripsi || ''
-        );
-        const newId = res && res.lastInsertRowid ? res.lastInsertRowid : null;
-        await dbRun('INSERT INTO riwayat (tipe, barang_id, barang_nama, jumlah, catatan, dibuat_oleh) VALUES (?,?,?,?,?,?)',
-          'tambah_barang', newId, body.nama, Number(body.stock || 0), body.catatan || '', perm.user.username);
-        return json({ ok: true, id: newId, foto_used: fotoUrl || null });
-      }
-
-      if (parts[0] === 'barang' && parts[1] && ['PUT','PATCH'].includes(method)) {
-        const perm = await checkRole(getHeaderUser(request), ['owner','admin']); if (!perm.ok) return json({ ok: false, error: perm.msg }, perm.code);
-        const id = Number(parts[1]); const body = await safeJson(request); if (!body) return json({ ok: false, error: 'body required' }, 400);
-        const cur = await dbFirst('SELECT nama,stock FROM barang WHERE id = ?', id); if (!cur) return json({ ok: false, error: 'not found' }, 404);
-
-        if (body.fetch_image && body.nama) {
-          const imgs = await fetchDuckImages(body.nama, 1); if (imgs.length > 0) body.foto = imgs[0];
-        }
-
-        const fields = []; const bind = [];
-        const addIf = (k, col) => { if (body[k] !== undefined) { fields.push(`${col}=?`); bind.push(body[k]); } };
-        addIf('kode_barang','kode_barang'); addIf('nama','nama'); addIf('harga','harga'); addIf('harga_modal','harga_modal');
-        addIf('stock','stock'); addIf('kategori','kategori'); addIf('foto','foto'); addIf('deskripsi','deskripsi');
-
-        if (!fields.length) return json({ ok: false, error: 'nothing to update' }, 400);
-        bind.push(id);
-        await dbRun(`UPDATE barang SET ${fields.join(',')}, updated_at=CURRENT_TIMESTAMP WHERE id=?`, ...bind);
-
-        if (body.stock !== undefined && Number(body.stock) !== Number(cur.stock)) {
-          const diff = Number(body.stock) - Number(cur.stock);
-          await dbRun('INSERT INTO riwayat (tipe, barang_id, barang_nama, jumlah, catatan, dibuat_oleh) VALUES (?,?,?,?,?,?)',
-            'edit_barang', id, body.nama || cur.nama, diff, body.catatan || 'adjust stock', perm.user.username);
+      // LOGIN - POST /login
+      if (request.method === "POST" && path === "/login") {
+        const contentType = request.headers.get("content-type") || "";
+        let body = {};
+        if (contentType.includes("application/json")) {
+          body = await request.json();
         } else {
-          await dbRun('INSERT INTO riwayat (tipe, barang_id, barang_nama, jumlah, catatan, dibuat_oleh) VALUES (?,?,?,?,?,?)',
-            'edit_barang', id, body.nama || cur.nama, 0, body.catatan || 'edit', perm.user.username);
+          // fallback to form data
+          const form = await request.formData();
+          for (const [k, v] of form.entries()) body[k] = v;
         }
-        return json({ ok: true, message: 'updated' });
+        const rawUsername = (body.username || "").toString().trim();
+        const username = ensureUsernameSuffix(rawUsername);
+        const password = (body.password || "").toString();
+
+        console.log(`[login] attempted username=${username}`);
+
+        if (!username || !password) {
+          return jsonResponse({ ok: false, error: "username and password required" }, 400, request);
+        }
+
+        // query users table
+        try {
+          const rows = await d1Query(env, "SELECT id, username FROM users WHERE username = ? AND password = ? LIMIT 1", [username, password]);
+          if (!rows || rows.length === 0) {
+            return jsonResponse({ ok: false, error: "invalid credentials" }, 401, request);
+          }
+          const user = rows[0];
+          // make a token (not persisted)
+          const token = makeToken();
+          // return user summary and token
+          return jsonResponse({ ok: true, user: { id: user.id, username: user.username }, token }, 200, request);
+        } catch (err) {
+          console.error("[login] d1 error:", err);
+          return jsonResponse({ ok: false, error: "server error (d1)" }, 500, request);
+        }
       }
 
-      if (parts[0] === 'barang' && parts[1] && method === 'DELETE') {
-        const perm = await checkRole(getHeaderUser(request), ['owner','admin']); if (!perm.ok) return json({ ok: false, error: perm.msg }, perm.code);
-        const id = Number(parts[1]); const cur = await dbFirst('SELECT nama FROM barang WHERE id = ?', id); if (!cur) return json({ ok: false, error: 'not found' }, 404);
-        await dbRun('DELETE FROM barang WHERE id = ?', id);
-        await dbRun('INSERT INTO riwayat (tipe, barang_id, barang_nama, jumlah, catatan, dibuat_oleh) VALUES (?,?,?,?,?,?)',
-          'hapus_barang', id, cur.nama || '', 0, '', perm.user.username);
-        return json({ ok: true, message: 'deleted' });
+      // GET /barang - list barang
+      if (request.method === "GET" && path === "/barang") {
+        try {
+          const rows = await d1Query(env, "SELECT id, kode_barang, nama, harga, stock, foto FROM barang ORDER BY id DESC LIMIT 200");
+          // normalize foto to empty string if null
+          const normalized = (rows || []).map(r => ({
+            id: r.id,
+            kode_barang: r.kode_barang,
+            nama: r.nama,
+            harga: r.harga,
+            stock: r.stock,
+            foto: r.foto || "",
+          }));
+          return jsonResponse({ ok: true, data: normalized }, 200, request);
+        } catch (err) {
+          console.error("[barang] d1 error:", err);
+          return jsonResponse({ ok: false, error: "server error (d1)" }, 500, request);
+        }
       }
 
-      // --- STOK MASUK
-      if (path === '/stok_masuk' && method === 'POST') {
-        const perm = await checkRole(getHeaderUser(request), ['owner','admin','mekanik']); if (!perm.ok) return json({ ok: false, error: perm.msg }, perm.code);
-        const body = await safeJson(request); if (!body) return json({ ok: false, error: 'body required' }, 400);
-        const qty = Number(body.jumlah || body.qty || 0); if (!qty || qty <= 0) return json({ ok: false, error: 'jumlah must be > 0' }, 400);
-        let bid = body.barang_id || null;
-        if (!bid && body.kode_barang) { const r = await dbFirst('SELECT id FROM barang WHERE kode_barang = ? LIMIT 1', body.kode_barang); bid = r ? r.id : null; }
-        if (!bid && body.nama) { const r = await dbFirst('SELECT id FROM barang WHERE nama = ? LIMIT 1', body.nama); bid = r ? r.id : null; }
-        let barangRow = null;
-        if (!bid && body.nama) {
-          const res = await dbRun('INSERT INTO barang (kode_barang,nama,harga,harga_modal,stock) VALUES (?,?,?,?,?)', body.kode_barang||'', body.nama, Number(body.harga||0), Number(body.harga_modal||0), 0);
-          bid = res && res.lastInsertRowid ? res.lastInsertRowid : null; barangRow = { id: bid, nama: body.nama, stock: 0 };
-        } else if (bid) {
-          const r = await dbFirst('SELECT id,nama,stock FROM barang WHERE id = ?', bid); barangRow = r || null;
-        } else return json({ ok: false, error: 'barang_id or kode_barang or nama required' }, 400);
-        if (!barangRow) return json({ ok: false, error: 'barang not found' }, 404);
-        const newStock = Number(barangRow.stock || 0) + qty;
-        await dbRun('UPDATE barang SET stock = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', newStock, bid);
-        await dbRun('INSERT INTO riwayat (tipe, barang_id, barang_nama, jumlah, catatan, dibuat_oleh) VALUES (?,?,?,?,?,?)',
-          'stok_masuk', bid, barangRow.nama, qty, body.catatan || '', perm.user.username);
-        return json({ ok: true, message: 'stok updated', barang_id: bid, newStock });
+      // POST /upload - expects form-data file (key: file) OR JSON { imageBase64 }
+      if (request.method === "POST" && path === "/upload") {
+        // require IMG_BB_KEY to actually upload
+        const imgbbKey = env.IMG_BB_KEY || null;
+        if (!imgbbKey) {
+          return jsonResponse({ ok: false, error: "IMG_BB_KEY not configured on worker" }, 400, request);
+        }
+
+        const contentType = request.headers.get("content-type") || "";
+        let base64 = null;
+
+        if (contentType.includes("multipart/form-data")) {
+          // parse file from formdata
+          const form = await request.formData();
+          const file = form.get("file") || form.get("image");
+          if (!file) return jsonResponse({ ok: false, error: "no file field (use 'file' or 'image')" }, 400, request);
+          // file is a File object; convert to ArrayBuffer then base64
+          const ab = await file.arrayBuffer();
+          base64 = Buffer.from(ab).toString("base64");
+        } else {
+          // JSON
+          const body = await request.json().catch(() => ({}));
+          if (body.imageBase64) base64 = body.imageBase64;
+          if (body.imageUrl) {
+            // fetch the image and convert
+            const r = await fetch(body.imageUrl);
+            const ab = await r.arrayBuffer();
+            base64 = Buffer.from(ab).toString("base64");
+          }
+        }
+
+        if (!base64) return jsonResponse({ ok: false, error: "no image data found" }, 400, request);
+
+        // upload to imgbb
+        try {
+          const form = new FormData();
+          form.append("key", imgbbKey);
+          form.append("image", base64);
+
+          const upl = await fetch("https://api.imgbb.com/1/upload", {
+            method: "POST",
+            body: form,
+          });
+
+          const j = await upl.json();
+          if (!j || !j.data || !j.data.url) {
+            console.error("[upload] imgbb response:", j);
+            return jsonResponse({ ok: false, error: "upload failed", raw: j }, 500, request);
+          }
+
+          return jsonResponse({ ok: true, url: j.data.url, thumb: j.data.thumb?.url || null }, 200, request);
+        } catch (err) {
+          console.error("[upload] err:", err);
+          return jsonResponse({ ok: false, error: "upload error" }, 500, request);
+        }
       }
 
-      // --- STOK KELUAR
-      if (path === '/stok_keluar' && method === 'POST') {
-        const perm = await checkRole(getHeaderUser(request), ['owner','admin','mekanik']); if (!perm.ok) return json({ ok: false, error: perm.msg }, perm.code);
-        const body = await safeJson(request); if (!body) return json({ ok: false, error: 'body required' }, 400);
-        const qty = Number(body.jumlah || body.qty || 0); if (!qty || qty <= 0) return json({ ok: false, error: 'jumlah must be > 0' }, 400);
-        let bid = body.barang_id || null;
-        if (!bid && body.kode_barang) { const r = await dbFirst('SELECT id FROM barang WHERE kode_barang = ? LIMIT 1', body.kode_barang); bid = r ? r.id : null; }
-        if (!bid && body.nama) { const r = await dbFirst('SELECT id FROM barang WHERE nama = ? LIMIT 1', body.nama); bid = r ? r.id : null; }
-        if (!bid) return json({ ok: false, error: 'barang_id or kode_barang or nama required' }, 400);
-        const barangRow = await dbFirst('SELECT id,nama,stock FROM barang WHERE id = ?', bid); if (!barangRow) return json({ ok: false, error: 'barang not found' }, 404);
-        if (Number(barangRow.stock || 0) < qty) return json({ ok: false, error: 'stock tidak mencukupi' }, 400);
-        const newStock = Number(barangRow.stock || 0) - qty;
-        await dbRun('UPDATE barang SET stock = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', newStock, bid);
-        await dbRun('INSERT INTO riwayat (tipe, barang_id, barang_nama, jumlah, catatan, dibuat_oleh) VALUES (?,?,?,?,?,?)',
-          'stok_keluar', bid, barangRow.nama, -qty, body.catatan || '', perm.user.username);
-        return json({ ok: true, message: 'stok updated', barang_id: bid, newStock });
-      }
-
-      // --- RIWAYAT
-      if (path === '/riwayat' && method === 'GET') {
-        const params = Object.fromEntries(url.searchParams.entries()); const limit = Number(params.limit || 100); const offset = Number(params.offset || 0);
-        const tipe = params.tipe || null; const barang_id = params.barang_id || null; const dibuat_oleh = params.user || params.dibuat_oleh || null;
-        const from = params.from || null; const to = params.to || null;
-        const binds = []; let where = [];
-        if (tipe) { where.push('tipe = ?'); binds.push(tipe); }
-        if (barang_id) { where.push('barang_id = ?'); binds.push(Number(barang_id)); }
-        if (dibuat_oleh) { where.push('dibuat_oleh = ?'); binds.push(dibuat_oleh); }
-        if (from) { where.push('created_at >= ?'); binds.push(from); }
-        if (to) { where.push('created_at <= ?'); binds.push(to); }
-        let sql = 'SELECT id,tipe,barang_id,barang_nama,jumlah,catatan,dibuat_oleh,created_at FROM riwayat';
-        if (where.length) sql += ' WHERE ' + where.join(' AND ');
-        sql += ' ORDER BY created_at DESC LIMIT ? OFFSET ?'; binds.push(limit, offset);
-        const res = await dbAll(sql, ...binds);
-        return json({ ok: true, results: res.results || [] });
-      }
-
-      // --- MORE
-      if (path === '/more' && method === 'GET') {
-        const r = await dbFirst('SELECT custom_message,sticky_message,welcome_image_url,updated_by,updated_at FROM more WHERE id = 1');
-        return json({ ok: true, result: r || {} });
-      }
-      if (path === '/more' && ['PUT','POST'].includes(method)) {
-        const perm = await checkRole(getHeaderUser(request), ['owner']); if (!perm.ok) return json({ ok: false, error: perm.msg }, perm.code);
-        const body = await safeJson(request);
-        await dbRun('UPDATE more SET custom_message=?,sticky_message=?,welcome_image_url=?,updated_by=?,updated_at=CURRENT_TIMESTAMP WHERE id=1',
-          body.custom_message || '', body.sticky_message || '', body.welcome_image_url || '', perm.user.username);
-        return json({ ok: true, message: 'updated' });
-      }
-
-      // fallback
-      return json({ ok: false, error: 'not found', path }, 404);
+      // fallback 404
+      return jsonResponse({ ok: false, error: "not found", path }, 404, request);
     } catch (err) {
-      return json({ ok: false, error: String(err) }, 500);
+      console.error("[worker] uncaught:", err);
+      return jsonResponse({ ok: false, error: "internal error", message: err.message }, 500, request);
     }
   }
 };
