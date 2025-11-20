@@ -2,9 +2,10 @@ name = "bmt-api-worker"
 main = "worker.js"
 compatibility_date = "2024-01-01"
 
-account_id = "7e8d54f47827fb92fbbf2251fff1338b"
+[vars]
+IMG_BB_KEY = "bf028c007711aefd71fdb56a932f7b74"
 
 [[d1_databases]]
 binding = "BMT_DB"
 database_name = "bmt_db"
-database_id = "969fef5e-d7a3-4f58-979b-dbef1f085580"
+database_id = "969fef5e-d7a3-4f58-979b-xxxxxxxxxxxx"
