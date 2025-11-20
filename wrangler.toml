@@ -6,6 +6,6 @@ account_id = "7e8d54f47827fb92fbbf2251fff1338b"
 type = "javascript"
 
 [[d1_databases]]
-binding = "DB"
+binding = "BMT_DB"
 database_name = "bmt_db"
 database_id = "969fef5e-d7a3-4f58-979b-dbef1f085580"
