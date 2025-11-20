@@ -8,6 +8,7 @@
 // Server-side resize requires extra WASM lib or R2/Images service and is not included here.
 
 // CORS Headers FIX
+
 function corsHeaders() {
   return {
     "Access-Control-Allow-Origin": "*",
