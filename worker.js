@@ -1,112 +1,143 @@
+/* ========================
+   File: worker.js (FINAL v1)
+   Minimal API: login, barang, upload
+   Stable + CORS universal + correct response shape
+   ======================== */
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    const path = url.pathname;
-    const db = env.BMT_DB; // HARUS sesuai binding di wrangler.toml / Cloudflare
+    const path = url.pathname.replace(/\/+$/, '');
+    const method = request.method.toUpperCase();
 
-    // -----------------------
-    // 1) LOGIN (POST /login)
-    // -----------------------
-    if (path === "/login" && request.method === "POST") {
+    // ---------- CORS ----------
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, X-User",
+    };
+
+    if (method === "OPTIONS") {
+      return new Response("ok", { status: 200, headers: corsHeaders });
+    }
+
+    const json = (obj, status = 200) =>
+      new Response(JSON.stringify(obj, null, 2), {
+        status,
+        headers: { "Content-Type": "application/json; charset=utf-8", ...corsHeaders },
+      });
+
+    const safeJson = async (req) => {
+      try { return await req.json(); } catch { return null; }
+    };
+
+    const db = env?.BMT_DB || null;
+    const IMGBB = env?.IMG_BB_KEY || null;
+
+    // ===========================================================
+    // LOGIN  (POST /login)
+    // ===========================================================
+    if (path === "/login" && method === "POST") {
+      if (!db) return json({ ok: false, error: "BMT_DB missing from bindings" }, 500);
+
+      const body = await safeJson(request);
+      if (!body?.username || !body?.password)
+        return json({ ok: false, error: "username & password required" }, 400);
+
       try {
-        const data = await request.json();
-        const { username, password } = data;
-
         const row = await db
-          .prepare("SELECT * FROM users WHERE username = ? AND password = ?")
-          .bind(username, password)
+          .prepare("SELECT username,name,role,photo_url FROM users WHERE username = ? AND password = ?")
+          .bind(body.username, body.password)
           .first();
 
-        if (!row) {
-          return Response.json({ ok: false, error: "not found", path });
-        }
+        if (!row) return json({ ok: false, error: "invalid credentials" }, 401);
 
-        return Response.json({ ok: true, user: row });
+        return json({ ok: true, user: row });
       } catch (e) {
-        console.log("LOGIN ERROR:", e);
-        return Response.json({ ok: false, error: "Internal", message: e.message });
+        return json({ ok: false, error: "DB error", detail: String(e) }, 500);
       }
     }
 
-    // -----------------------
-    // 2) GET /barang
-    // -----------------------
-    if (path === "/barang" && request.method === "GET") {
+    // ===========================================================
+    // GET BARANG  (GET /barang)
+    // ===========================================================
+    if (path === "/barang" && method === "GET") {
+      if (!db) return json({ ok: false, error: "BMT_DB missing from bindings" }, 500);
+
       try {
-        const rows = await db.prepare("SELECT * FROM barang").all();
-        return Response.json({
+        const res = await db
+          .prepare("SELECT id,nama,harga,harga_modal,stock,kategori,foto,deskripsi FROM barang ORDER BY id DESC")
+          .all();
+
+        return json({
           ok: true,
-          total: rows.results.length,
-          data: rows.results,
+          total: res?.results?.length || 0,
+          results: res?.results || [],
         });
       } catch (e) {
-        console.log("BARANG ERROR:", e);
-        return Response.json({ ok: false, error: "Internal", message: e.message });
+        return json({ ok: false, error: "DB error", detail: String(e) }, 500);
       }
     }
 
-    // -----------------------
-    // 3) POST /upload (imgbb)
-    // -----------------------
-    if (path === "/upload" && request.method === "POST") {
+    // ===========================================================
+    // UPLOAD (POST /upload)
+    // multipart/form-data → field name: "file"
+    // ===========================================================
+    if (path === "/upload" && method === "POST") {
+      if (!IMGBB) return json({ ok: false, error: "IMG_BB_KEY not set in worker env" }, 500);
+
+      const ct = request.headers.get("content-type") || "";
+      if (!ct.includes("multipart/form-data")) {
+        return json({ ok: false, error: 'Expected multipart/form-data with field "file"' }, 400);
+      }
+
       try {
-        if (!env.IMG_BB_KEY) {
-          return Response.json({ ok: false, error: "IMG_BB_KEY not configured on worker" });
-        }
+        const form = await request.formData();
+        const file = form.get("file");
 
-        // support form-data file upload
-        const contentType = request.headers.get("content-type") || "";
-        if (!contentType.includes("multipart/form-data")) {
-          return Response.json({ ok: false, error: "Expected multipart/form-data" });
-        }
+        if (!file) return json({ ok: false, error: 'No field "file" provided' });
 
-        const formData = await request.formData();
-        const imageFile = formData.get("file"); // gunakan "file" sesuai form tester
+        const ab = await file.arrayBuffer();
+        const bytes = new Uint8Array(ab);
 
-        if (!imageFile) {
-          return Response.json({ ok: false, error: "No file uploaded" });
-        }
-
-        // baca binary, ubah jadi base64 (Cloudflare safe)
-        const arrayBuffer = await imageFile.arrayBuffer();
-        const bytes = new Uint8Array(arrayBuffer);
-
-        // Convert bytes -> binary string in chunks to be safe
-        let CHUNK = 0x8000; // chunk size
-        let binary = "";
+        // convert bytes → base64
+        let bin = "";
+        const CHUNK = 0x8000;
         for (let i = 0; i < bytes.length; i += CHUNK) {
-          const slice = bytes.subarray(i, Math.min(i + CHUNK, bytes.length));
-          binary += String.fromCharCode.apply(null, slice);
+          bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
         }
-        const base64 = btoa(binary);
+        const base64 = btoa(bin);
 
-        // prepare body
         const body = new URLSearchParams();
-        body.append("key", env.IMG_BB_KEY);
+        body.append("key", IMGBB);
         body.append("image", base64);
 
-        const uploadRes = await fetch("https://api.imgbb.com/1/upload", {
+        const resp = await fetch("https://api.imgbb.com/1/upload", {
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
           body,
         });
 
-        const result = await uploadRes.json();
+        const data = await resp.json();
 
-        console.log("UPLOAD RESPONSE:", result);
-
-        if (!result.success) {
-          return Response.json({ ok: false, error: "Upload failed", detail: result });
+        // imgbb success check
+        if (!data?.success || !data?.data?.url) {
+          return json({ ok: false, error: "Upload failed", detail: data }, 500);
         }
 
-        return Response.json({ ok: true, url: result.data.url });
+        return json({ ok: true, url: data.data.url, detail: data });
       } catch (e) {
-        console.log("UPLOAD ERROR:", e);
-        return Response.json({ ok: false, error: "Internal", message: e.message });
+        return json({ ok: false, error: "upload error", detail: String(e) }, 500);
       }
     }
 
-    // default
-    return Response.json({ ok: false, error: "Route not found", path });
+    // ===========================================================
+    // HEALTH CHECK
+    // ===========================================================
+    if (path === "" || path === "/") {
+      return json({ ok: true, message: "BMT API minimal OK" });
+    }
+
+    return json({ ok: false, error: "Route not found", route: path }, 404);
   },
 };
