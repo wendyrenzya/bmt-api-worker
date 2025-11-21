@@ -1,20 +1,61 @@
-// worker.js (full)
-// Exposes:
-// GET  /api/barang           -> list all items
-// GET  /api/barang/:id       -> get single item
-// POST /api/barang           -> add item (auto numeric kode_barang, 5 digits)
-// PUT  /api/barang/:id       -> update item
-// DELETE /api/barang/:id     -> delete item
-// GET  /api/kategori         -> distinct kategori
-// GET  /api/duckimg?q=...    -> duckduckgo image proxy
-//
-// Requires D1 binding named "DB" in wrangler.toml
+// worker.js (MODULE FORMAT – Cloudflare D1 Compatible)
+// ===================================================
+// ENDPOINTS:
+// GET    /api/barang
+// GET    /api/barang/:id
+// POST   /api/barang        (auto numeric kode_barang)
+// PUT    /api/barang/:id
+// DELETE /api/barang/:id
+// GET    /api/kategori
+// GET    /api/duckimg?q=...
+// ===================================================
 
-addEventListener("fetch", event => {
-  event.respondWith(handleRequest(event.request, event));
-});
+export default {
+  async fetch(request, env, ctx) {
+    try {
+      const url = new URL(request.url);
+      const path = url.pathname.replace(/\/+$/, "");
+      const method = request.method;
 
-function jsonHeaders() {
+      // CORS PRE-FLIGHT
+      if (method === "OPTIONS") {
+        return new Response(null, { status: 204, headers: corsHeaders() });
+      }
+
+      // ROUTING
+      if (path === "/api/barang" && method === "GET")
+        return listBarang(env);
+
+      if (path.startsWith("/api/barang/") && method === "GET")
+        return getBarangById(env, request);
+
+      if (path === "/api/barang" && method === "POST")
+        return addBarang(env, request);
+
+      if (path.startsWith("/api/barang/") && method === "PUT")
+        return updateBarang(env, request);
+
+      if (path.startsWith("/api/barang/") && method === "DELETE")
+        return deleteBarang(env, request);
+
+      if (path === "/api/kategori" && method === "GET")
+        return listKategori(env);
+
+      if (path === "/api/duckimg" && method === "GET")
+        return duckImageProxy(request);
+
+      return json({ error: "Not Found" }, 404);
+
+    } catch (err) {
+      return json({ error: err.message || "Server Error" }, 500);
+    }
+  }
+};
+
+// ===================================================
+// UTILITIES
+// ===================================================
+function corsHeaders() {
   return {
     "Content-Type": "application/json;charset=UTF-8",
     "Access-Control-Allow-Origin": "*",
@@ -23,142 +64,65 @@ function jsonHeaders() {
   };
 }
 
-function textHeaders() {
-  return {
-    "Content-Type": "text/plain;charset=UTF-8",
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET,HEAD,POST,PUT,DELETE,OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization"
-  };
+function json(data, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: corsHeaders()
+  });
 }
 
-async function handleRequest(request, event) {
-  const { method } = request;
-  const url = new URL(request.url);
-  const path = url.pathname.replace(/\/+$/, ""); // trim trailing slash
-  // CORS preflight
-  if (method === "OPTIONS") {
-    return new Response(null, { status: 204, headers: jsonHeaders() });
-  }
-
-  // route /api/*
-  try {
-    if (path === "/api/barang" && method === "GET") {
-      return await listBarang(request, event);
-    }
-
-    if (path.startsWith("/api/barang/") && method === "GET") {
-      return await getBarangById(request, event);
-    }
-
-    if (path === "/api/barang" && method === "POST") {
-      return await addBarang(request, event);
-    }
-
-    if (path.startsWith("/api/barang/") && method === "PUT") {
-      return await updateBarang(request, event);
-    }
-
-    if (path.startsWith("/api/barang/") && method === "DELETE") {
-      return await deleteBarang(request, event);
-    }
-
-    if (path === "/api/kategori" && method === "GET") {
-      return await listKategori(request, event);
-    }
-
-    if (path === "/api/duckimg" && method === "GET") {
-      return await duckImageProxy(request, event);
-    }
-
-    return new Response(JSON.stringify({ error: "Not found" }), { status: 404, headers: jsonHeaders() });
-  } catch (err) {
-    console.error("Unhandled error", err);
-    return new Response(JSON.stringify({ error: err.message || "Server error" }), { status: 500, headers: jsonHeaders() });
-  }
+async function bodyJSON(request) {
+  try { return await request.json(); }
+  catch { return null; }
 }
 
-/* ---------- Helpers to access DB binding ---------- */
-function getDB(env = globalThis) {
-  // In Workers runtime, DB is available on global binding via env in modules,
-  // but since we use classic worker script, we assume binding named DB available as global variable
-  // Cloudflare's classic worker maps bindings to global scope.
-  return globalThis.DB;
+// ===================================================
+// HANDLERS
+// ===================================================
+
+// 1) LIST BARANG
+async function listBarang(env) {
+  const sql = `SELECT * FROM barang ORDER BY id DESC`;
+  const res = await env.BMT_DB.prepare(sql).all();
+  return json({ items: res.results || [] });
 }
 
-async function queryAll(stmt, params = []) {
-  const db = getDB();
-  const res = await db.prepare(stmt).bind(...params).all();
-  return res.results || [];
-}
-async function queryFirst(stmt, params = []) {
-  const db = getDB();
-  const res = await db.prepare(stmt).bind(...params).first();
-  // .first() returns undefined or object
-  return res || null;
-}
-
-/* ---------- Handlers ---------- */
-
-async function listBarang(request, event) {
-  const db = getDB();
-  if (!db) return new Response(JSON.stringify({ error: "DB not bound" }), { status: 500, headers: jsonHeaders() });
-
-  const sql = `SELECT id, kode_barang, nama, harga_modal, harga, stock, kategori, foto, deskripsi, created_at
-               FROM barang ORDER BY id DESC`;
-  const res = await db.prepare(sql).all();
-  const items = (res && res.results) ? res.results : [];
-  return new Response(JSON.stringify({ items }), { status: 200, headers: jsonHeaders() });
-}
-
-async function getBarangById(request, event) {
-  const db = getDB();
-  if (!db) return new Response(JSON.stringify({ error: "DB not bound" }), { status: 500, headers: jsonHeaders() });
-
-  const parts = new URL(request.url).pathname.split("/").filter(Boolean); // ["api","barang",":id"]
+// 2) GET BARANG BY ID
+async function getBarangById(env, request) {
+  const parts = new URL(request.url).pathname.split("/").filter(Boolean);
   const id = Number(parts[2]);
-  if (!id) return new Response(JSON.stringify({ error: "invalid id" }), { status: 400, headers: jsonHeaders() });
+  if (!id) return json({ error: "Invalid ID" }, 400);
 
-  const res = await db.prepare("SELECT * FROM barang WHERE id = ?").bind(id).first();
-  return new Response(JSON.stringify({ item: res || null }), { status: 200, headers: jsonHeaders() });
+  const res = await env.BMT_DB.prepare("SELECT * FROM barang WHERE id=?")
+    .bind(id).first();
+
+  return json({ item: res || null });
 }
 
-async function addBarang(request, event) {
-  const db = getDB();
-  if (!db) return new Response(JSON.stringify({ error: "DB not bound" }), { status: 500, headers: jsonHeaders() });
-
-  const body = await safeJson(request);
-  // minimal validation
-  if (!body || !body.nama || !body.harga) {
-    return new Response(JSON.stringify({ error: "fields nama & harga required" }), { status: 400, headers: jsonHeaders() });
+// 3) ADD BARANG
+async function addBarang(env, request) {
+  const body = await bodyJSON(request);
+  if (!body) return json({ error: "Invalid JSON" }, 400);
+  if (!body.nama || !body.harga) {
+    return json({ error: "nama & harga wajib" }, 400);
   }
 
-  // FULL AUTO NUMERIC for kode_barang - ignore input kode_barang
-  // Find max numeric kode stored in kode_barang column; to be safe, consider non-numeric entries might exist,
-  // so coerce using CAST; but D1 SQLite cannot cast gracefully: we'll try to read max as integer ignoring nulls
-  // Assume existing kode_barang stored as numeric strings (padded). We'll fetch MAX(CAST(kode_barang AS INTEGER))
-  let nextNum = 1;
+  // AUTO NUMERIC KODE BARANG
+  let next = 1;
   try {
-    // Attempt to get numeric max; if no rows, result may be undefined
-    const maxRow = await db.prepare("SELECT MAX(CAST(kode_barang AS INTEGER)) AS maxcode FROM barang").first();
-    if (maxRow && maxRow.maxcode !== null && !isNaN(Number(maxRow.maxcode))) {
-      nextNum = Number(maxRow.maxcode) + 1;
-    }
-  } catch (e) {
-    // fallback: count rows +1
-    try {
-      const c = await db.prepare("SELECT COUNT(1) AS c FROM barang").first();
-      nextNum = (c && c.c) ? Number(c.c) + 1 : nextNum;
-    } catch (_) { /* ignore */ }
-  }
+    const max = await env.BMT_DB
+      .prepare("SELECT MAX(CAST(kode_barang AS INTEGER)) AS maxcode FROM barang")
+      .first();
+    if (max && max.maxcode) next = Number(max.maxcode) + 1;
+  } catch (_) {}
 
-  const kode_barang = String(nextNum).padStart(5, "0");
+  const kode_barang = String(next).padStart(5, "0");
   const now = new Date().toISOString();
 
-  const insertSQL = `INSERT INTO barang (kode_barang, nama, harga_modal, harga, stock, kategori, foto, deskripsi, created_at)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
-
-  const params = [
+  await env.BMT_DB.prepare(`
+    INSERT INTO barang (kode_barang, nama, harga_modal, harga, stock, kategori, foto, deskripsi, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(
     kode_barang,
     body.nama,
     body.harga_modal || 0,
@@ -168,90 +132,95 @@ async function addBarang(request, event) {
     body.foto || "",
     body.deskripsi || "",
     now
-  ];
+  ).run();
 
-  const r = await db.prepare(insertSQL).bind(...params).all();
-  // Note: D1 returns results for INSERT ... RETURNING if used; to be safe, fetch last inserted id:
-  // D1 SQLite does not provide lastInsertRowId directly via API; we can re-query by kode_barang+created_at
-  const inserted = await db.prepare("SELECT id FROM barang WHERE kode_barang = ? AND created_at = ? LIMIT 1")
-    .bind(kode_barang, now).first();
+  const findInserted = await env.BMT_DB.prepare(`
+    SELECT id FROM barang WHERE kode_barang=? AND created_at=? LIMIT 1
+  `).bind(kode_barang, now).first();
 
-  return new Response(JSON.stringify({ ok: true, id: inserted ? inserted.id : null, kode_barang }), { status: 201, headers: jsonHeaders() });
+  return json({
+    ok: true,
+    id: findInserted ? findInserted.id : null,
+    kode_barang
+  });
 }
 
-async function updateBarang(request, event) {
-  const db = getDB();
-  if (!db) return new Response(JSON.stringify({ error: "DB not bound" }), { status: 500, headers: jsonHeaders() });
+// 4) UPDATE BARANG
+async function updateBarang(env, request) {
+  const body = await bodyJSON(request);
+  if (!body) return json({ error: "Invalid JSON" }, 400);
 
   const parts = new URL(request.url).pathname.split("/").filter(Boolean);
   const id = Number(parts[2]);
-  if (!id) return new Response(JSON.stringify({ error: "invalid id" }), { status: 400, headers: jsonHeaders() });
+  if (!id) return json({ error: "Invalid ID" }, 400);
 
-  const body = await safeJson(request);
-  if (!body) return new Response(JSON.stringify({ error: "no payload" }), { status: 400, headers: jsonHeaders() });
-
-  const allowed = ["nama","harga_modal","harga","stock","kategori","foto","deskripsi"];
-  const setClauses = [];
+  const allowed = ["nama", "harga_modal", "harga", "stock", "kategori", "foto", "deskripsi"];
+  const sets = [];
   const vals = [];
-  for (const k of allowed) {
-    if (k in body) {
-      setClauses.push(`${k} = ?`);
-      vals.push(body[k]);
+
+  for (const key of allowed) {
+    if (body[key] !== undefined) {
+      sets.push(`${key}=?`);
+      vals.push(body[key]);
     }
   }
-  if (setClauses.length === 0) {
-    return new Response(JSON.stringify({ error: "no updatable fields" }), { status: 400, headers: jsonHeaders() });
-  }
+
+  if (sets.length === 0)
+    return json({ error: "No fields to update" }, 400);
+
   vals.push(id);
-  const sql = `UPDATE barang SET ${setClauses.join(", ")} WHERE id = ?`;
-  await db.prepare(sql).bind(...vals).run();
-  return new Response(JSON.stringify({ ok: true }), { status: 200, headers: jsonHeaders() });
+
+  await env.BMT_DB
+    .prepare(`UPDATE barang SET ${sets.join(", ")} WHERE id=?`)
+    .bind(...vals)
+    .run();
+
+  return json({ ok: true });
 }
 
-async function deleteBarang(request, event) {
-  const db = getDB();
-  if (!db) return new Response(JSON.stringify({ error: "DB not bound" }), { status: 500, headers: jsonHeaders() });
-
+// 5) DELETE
+async function deleteBarang(env, request) {
   const parts = new URL(request.url).pathname.split("/").filter(Boolean);
   const id = Number(parts[2]);
-  if (!id) return new Response(JSON.stringify({ error: "invalid id" }), { status: 400, headers: jsonHeaders() });
+  if (!id) return json({ error: "Invalid ID" }, 400);
 
-  await db.prepare("DELETE FROM barang WHERE id = ?").bind(id).run();
-  return new Response(JSON.stringify({ ok: true }), { status: 200, headers: jsonHeaders() });
+  await env.BMT_DB.prepare("DELETE FROM barang WHERE id=?").bind(id).run();
+  return json({ ok: true });
 }
 
-async function listKategori(request, event) {
-  const db = getDB();
-  if (!db) return new Response(JSON.stringify({ error: "DB not bound" }), { status: 500, headers: jsonHeaders() });
+// 6) KATEGORI (DISTINCT)
+async function listKategori(env) {
+  const res = await env.BMT_DB
+    .prepare(`SELECT DISTINCT kategori FROM barang WHERE kategori!='' ORDER BY kategori`)
+    .all();
 
-  const res = await db.prepare("SELECT DISTINCT kategori FROM barang WHERE kategori != '' ORDER BY kategori").all();
-  const list = (res && res.results) ? res.results.map(r => r.kategori) : [];
-  return new Response(JSON.stringify({ categories: list }), { status: 200, headers: jsonHeaders() });
+  const categories = res.results ? res.results.map(r => r.kategori) : [];
+  return json({ categories });
 }
 
-async function duckImageProxy(request, event) {
+// 7) DUCKDUCKGO IMAGE
+async function duckImageProxy(request) {
   const url = new URL(request.url);
   const q = url.searchParams.get("q") || "";
-  if (!q) return new Response(JSON.stringify({ image: "" }), { status: 200, headers: jsonHeaders() });
+  if (!q) return json({ image: "" });
 
-  const ddg = `https://duckduckgo.com/i.js?q=${encodeURIComponent(q)}`;
+  const api = `https://duckduckgo.com/i.js?q=${encodeURIComponent(q)}`;
+
   try {
-    const r = await fetch(ddg, { headers: { "Accept": "application/json", "User-Agent": "Mozilla/5.0" } });
-    const json = await r.json();
-    if (json && json.results && json.results.length > 0) {
-      return new Response(JSON.stringify({ image: json.results[0].image }), { status: 200, headers: jsonHeaders() });
+    const r = await fetch(api, {
+      headers: {
+        "Accept": "application/json",
+        "User-Agent": "Mozilla/5.0"
+      }
+    });
+    const data = await r.json();
+
+    if (data?.results?.length) {
+      return json({ image: data.results[0].image });
     }
   } catch (e) {
-    console.warn("duck fetch error", e);
+    console.log("DuckDuckGo error:", e);
   }
-  return new Response(JSON.stringify({ image: "" }), { status: 200, headers: jsonHeaders() });
-}
 
-/* ---------- Utilities ---------- */
-async function safeJson(request) {
-  try {
-    return await request.json();
-  } catch (e) {
-    return null;
-  }
-     }
+  return json({ image: "" });
+                       }
