@@ -198,29 +198,41 @@ async function listKategori(env) {
   return json({ categories });
 }
 
-// 7) DUCKDUCKGO IMAGE
+// PATCH DUCKDUCKGO (2025 Compatible)
 async function duckImageProxy(request) {
   const url = new URL(request.url);
   const q = url.searchParams.get("q") || "";
   if (!q) return json({ image: "" });
 
-  const api = `https://duckduckgo.com/i.js?q=${encodeURIComponent(q)}`;
-
   try {
-    const r = await fetch(api, {
+    // 1. Ambil vqd token
+    const searchURL = `https://duckduckgo.com/?q=${encodeURIComponent(q)}`;
+    const html = await fetch(searchURL, {
+      headers: { "User-Agent": "Mozilla/5.0" }
+    }).then(r => r.text());
+
+    const vqdMatch = html.match(/vqd=([0-9-]+)\&/);
+    if (!vqdMatch) return json({ image: "" });
+    const vqd = vqdMatch[1];
+
+    // 2. Fetch image JSON
+    const apiURL =
+      `https://duckduckgo.com/i.js?l=us-en&o=json&q=${encodeURIComponent(q)}&vqd=${vqd}`;
+
+    const imgData = await fetch(apiURL, {
       headers: {
         "Accept": "application/json",
         "User-Agent": "Mozilla/5.0"
       }
-    });
-    const data = await r.json();
+    }).then(r => r.json());
 
-    if (data?.results?.length) {
-      return json({ image: data.results[0].image });
+    if (imgData?.results?.length > 0) {
+      return json({ image: imgData.results[0].image });
     }
-  } catch (e) {
-    console.log("DuckDuckGo error:", e);
+
+  } catch (err) {
+    console.log("DuckImage error", err);
   }
 
   return json({ image: "" });
-                       }
+}
