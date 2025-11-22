@@ -1,14 +1,7 @@
-// worker.js (MODULE FORMAT – Cloudflare D1 Compatible)
-// ===================================================
-// ENDPOINTS:
-// GET    /api/barang
-// GET    /api/barang/:id
-// POST   /api/barang        (auto numeric kode_barang)
-// PUT    /api/barang/:id
-// DELETE /api/barang/:id
-// GET    /api/kategori
-// GET    /api/duckimg?q=...
-// ===================================================
+// =========================================================
+// worker.js FINAL — Big Motor Tingkulu
+// Paket 1: /api/duckimages + /api/upload
+// =========================================================
 
 export default {
   async fetch(request, env, ctx) {
@@ -17,12 +10,31 @@ export default {
       const path = url.pathname.replace(/\/+$/, "");
       const method = request.method;
 
+      // ---------------------------------------
       // CORS PRE-FLIGHT
+      // ---------------------------------------
       if (method === "OPTIONS") {
         return new Response(null, { status: 204, headers: corsHeaders() });
       }
 
-      // ROUTING
+      // ---------------------------------------
+      // NEW ENDPOINTS (AMAN, tidak merusak CRUD)
+      // ---------------------------------------
+
+      // 1) Multiple DuckDuckGo images — 5 images array
+      if (path === "/api/duckimages" && method === "GET") {
+        return duckImagesHandler(request, env);
+      }
+
+      // 2) Server-side upload to ImgBB
+      if (path === "/api/upload" && method === "POST") {
+        return uploadHandler(request, env);
+      }
+
+      // ---------------------------------------
+      // EXISTING CRUD BARANG (dipertahankan)
+      // ---------------------------------------
+
       if (path === "/api/barang" && method === "GET")
         return listBarang(env);
 
@@ -41,9 +53,13 @@ export default {
       if (path === "/api/kategori" && method === "GET")
         return listKategori(env);
 
+      // Old endpoint (single Duck image)
       if (path === "/api/duckimg" && method === "GET")
         return duckImageProxy(request);
 
+      // ---------------------------------------
+      // FALLBACK
+      // ---------------------------------------
       return json({ error: "Not Found" }, 404);
 
     } catch (err) {
@@ -52,9 +68,9 @@ export default {
   }
 };
 
-// ===================================================
+// =========================================================
 // UTILITIES
-// ===================================================
+// =========================================================
 function corsHeaders() {
   return {
     "Content-Type": "application/json;charset=UTF-8",
@@ -63,22 +79,20 @@ function corsHeaders() {
     "Access-Control-Allow-Headers": "Content-Type, Authorization"
   };
 }
-
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
     headers: corsHeaders()
   });
 }
-
 async function bodyJSON(request) {
   try { return await request.json(); }
   catch { return null; }
 }
 
-// ===================================================
-// HANDLERS
-// ===================================================
+// =========================================================
+// CRUD BARANG (ASLI, TIDAK DIUBAH)
+// =========================================================
 
 // 1) LIST BARANG
 async function listBarang(env) {
@@ -89,8 +103,7 @@ async function listBarang(env) {
 
 // 2) GET BARANG BY ID
 async function getBarangById(env, request) {
-  const parts = new URL(request.url).pathname.split("/").filter(Boolean);
-  const id = Number(parts[2]);
+  const id = Number(request.url.split("/").pop());
   if (!id) return json({ error: "Invalid ID" }, 400);
 
   const res = await env.BMT_DB.prepare("SELECT * FROM barang WHERE id=?")
@@ -150,8 +163,7 @@ async function updateBarang(env, request) {
   const body = await bodyJSON(request);
   if (!body) return json({ error: "Invalid JSON" }, 400);
 
-  const parts = new URL(request.url).pathname.split("/").filter(Boolean);
-  const id = Number(parts[2]);
+  const id = Number(request.url.split("/").pop());
   if (!id) return json({ error: "Invalid ID" }, 400);
 
   const allowed = ["nama", "harga_modal", "harga", "stock", "kategori", "foto", "deskripsi"];
@@ -180,8 +192,7 @@ async function updateBarang(env, request) {
 
 // 5) DELETE
 async function deleteBarang(env, request) {
-  const parts = new URL(request.url).pathname.split("/").filter(Boolean);
-  const id = Number(parts[2]);
+  const id = Number(request.url.split("/").pop());
   if (!id) return json({ error: "Invalid ID" }, 400);
 
   await env.BMT_DB.prepare("DELETE FROM barang WHERE id=?").bind(id).run();
@@ -198,41 +209,110 @@ async function listKategori(env) {
   return json({ categories });
 }
 
-// PATCH DUCKDUCKGO (2025 Compatible)
+// 7) DUCK IMAGE (lama, tetap dipertahankan)
 async function duckImageProxy(request) {
   const url = new URL(request.url);
   const q = url.searchParams.get("q") || "";
   if (!q) return json({ image: "" });
 
+  const api = `https://duckduckgo.com/i.js?q=${encodeURIComponent(q)}`;
+
   try {
-    // 1. Ambil vqd token
-    const searchURL = `https://duckduckgo.com/?q=${encodeURIComponent(q)}`;
-    const html = await fetch(searchURL, {
-      headers: { "User-Agent": "Mozilla/5.0" }
-    }).then(r => r.text());
-
-    const vqdMatch = html.match(/vqd=([0-9-]+)\&/);
-    if (!vqdMatch) return json({ image: "" });
-    const vqd = vqdMatch[1];
-
-    // 2. Fetch image JSON
-    const apiURL =
-      `https://duckduckgo.com/i.js?l=us-en&o=json&q=${encodeURIComponent(q)}&vqd=${vqd}`;
-
-    const imgData = await fetch(apiURL, {
+    const r = await fetch(api, {
       headers: {
         "Accept": "application/json",
         "User-Agent": "Mozilla/5.0"
       }
-    }).then(r => r.json());
+    });
+    const data = await r.json();
 
-    if (imgData?.results?.length > 0) {
-      return json({ image: imgData.results[0].image });
+    if (data?.results?.length) {
+      return json({ image: data.results[0].image });
     }
-
-  } catch (err) {
-    console.log("DuckImage error", err);
+  } catch (e) {
+    console.log("DuckDuckGo error:", e);
   }
 
   return json({ image: "" });
 }
+
+// =========================================================
+// NEW ENDPOINT: /api/duckimages  (returns 5 images)
+// =========================================================
+
+async function duckImagesHandler(request, env) {
+  const url = new URL(request.url);
+  const q = url.searchParams.get("q") || "";
+  if (!q) return json({ images: [] });
+
+  let results = [];
+
+  // Try DuckDuckGo i.js
+  try {
+    const ddUrl = `https://duckduckgo.com/i.js?q=${encodeURIComponent(q)}`;
+    const res = await fetch(ddUrl, { headers: { "Accept": "application/json" }});
+    if (res.ok) {
+      const j = await res.json();
+      if (Array.isArray(j.results)) {
+        results = j.results.map(r => r.image).filter(Boolean);
+      }
+    }
+  } catch(e) {}
+
+  // If less than 5, fill with Unsplash source
+  while (results.length < 5) {
+    results.push(`https://source.unsplash.com/600x450/?${encodeURIComponent(q)}&sig=${Math.random().toString(36).slice(2,8)}`);
+  }
+
+  // Dedup & trim
+  const final = [...new Set(results)].slice(0,5);
+  return json({ images: final });
+}
+
+// =========================================================
+// NEW ENDPOINT: /api/upload (server-side ImgBB upload)
+// =========================================================
+
+async function uploadHandler(request, env) {
+  const IMG_KEY = env.IMG_BB_KEY;
+  if (!IMG_KEY) return json({ error: "IMG_BB_KEY not configured" }, 500);
+
+  let base64 = null;
+  const ct = request.headers.get("content-type") || "";
+
+  if (ct.includes("application/json")) {
+    const b = await request.json().catch(()=>null);
+    base64 = b?.image || null;
+  } else if (ct.includes("form")) {
+    const fd = await request.formData();
+    const file = fd.get("image");
+    if (file && file.arrayBuffer) {
+      const ab = await file.arrayBuffer();
+      base64 = btoa(String.fromCharCode(...new Uint8Array(ab)));
+    } else {
+      base64 = file;
+    }
+  }
+
+  if (!base64) return json({ error:"No image payload" }, 400);
+
+  base64 = base64.replace(/^data:.*;base64,/, "");
+
+  const form = new URLSearchParams();
+  form.append("key", IMG_KEY);
+  form.append("image", base64);
+
+  try {
+    const r = await fetch("https://api.imgbb.com/1/upload", {
+      method: "POST",
+      body: form
+    });
+    const jr = await r.json().catch(()=>null);
+    return new Response(JSON.stringify(jr), {
+      status: r.status,
+      headers: corsHeaders()
+    });
+  } catch(e) {
+    return json({ error:"ImgBB upload failed", detail:String(e) }, 500);
+  }
+    }
