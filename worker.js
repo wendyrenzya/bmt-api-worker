@@ -326,49 +326,41 @@ async function updateBarang(env, req){
    RIWAYAT — exclude edit_barang entirely
    ========================== */
 async function riwayatAll(env, req){
+async function riwayatAll(env, req){
   const url = req instanceof URL ? req : new URL(req.url);
   const limit = Number(url.searchParams.get("limit") || 50);
   const offset = Number(url.searchParams.get("offset") || 0);
 
-  const sql = `
-    SELECT transaksi_id, MIN(created_at) AS waktu FROM (
-      SELECT transaksi_id, created_at FROM stok_masuk
-      UNION ALL
-      SELECT transaksi_id, created_at FROM stok_keluar
-      UNION ALL
-      SELECT transaksi_id, created_at FROM stok_audit
-    )
+  const rows = await env.BMT_DB.prepare(`
+    SELECT transaksi_id, MIN(created_at) AS waktu
+    FROM riwayat
     GROUP BY transaksi_id
     ORDER BY waktu DESC
     LIMIT ? OFFSET ?
-  `;
-  const rows = await env.BMT_DB.prepare(sql).bind(limit, offset).all();
+  `).bind(limit, offset).all();
+
   return json({ items: rows.results || [] });
 }
 
 async function riwayatDetail(env, req){
   const url = new URL(req.url);
-  const parts = url.pathname.split("/").filter(Boolean);
-  const tid = decodeURIComponent(parts[parts.length - 1]);
+  const tid = decodeURIComponent(url.pathname.split("/").pop());
 
-  const masuk = await env.BMT_DB.prepare(`SELECT * FROM stok_masuk WHERE transaksi_id=?`).bind(tid).all();
-  const keluar = await env.BMT_DB.prepare(`SELECT * FROM stok_keluar WHERE transaksi_id=?`).bind(tid).all();
-  let audit;
-  try {
-    audit = await env.BMT_DB.prepare(`SELECT * FROM stok_audit WHERE transaksi_id=?`).bind(tid).all();
-    audit = audit.results || [];
-  } catch(e) {
-    // fallback: try riwayat table if stok_audit doesn't exist
-    const r = await env.BMT_DB.prepare(`SELECT * FROM riwayat WHERE transaksi_id=?`).bind(tid).all().catch(()=>({ results: [] }));
-    audit = (r.results || []).filter(x=> x.tipe === 'audit' || x.tipe === 'masuk' || x.tipe === 'keluar');
-  }
+  const r = await env.BMT_DB.prepare(`
+    SELECT *
+    FROM riwayat
+    WHERE transaksi_id = ?
+    ORDER BY created_at ASC
+  `).bind(tid).all();
+
+  const rows = r.results || [];
 
   return json({
     transaksi_id: tid,
-    masuk: (masuk.results || []),
-    keluar: (keluar.results || []),
-    audit: (audit || []),
-    edits: [] // intentionally removed
+    masuk: rows.filter(x => x.tipe === 'masuk'),
+    keluar: rows.filter(x => x.tipe === 'keluar'),
+    audit: rows.filter(x => x.tipe === 'audit'),
+    edits: [] // kamu memang mau hide edit
   });
 }
 
