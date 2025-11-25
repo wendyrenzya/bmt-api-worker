@@ -61,6 +61,16 @@ export default {
       if (path.startsWith("/api/users/") && method === "PUT") return usersUpdate(env, request);
       if (path.startsWith("/api/users/") && method === "DELETE") return usersDelete(env, request);
 
+      // PENGELUARAN (BARU)
+if (path === "/api/pengeluaran" && method === "POST") 
+  return pengeluaranAdd(env, request);
+
+if (path === "/api/pengeluaran" && method === "GET") 
+  return pengeluaranList(env);
+
+if (path.startsWith("/api/pengeluaran/") && method === "DELETE") 
+  return pengeluaranDelete(env, request);
+      
       // health fallback
       if (path === "/api/health" || path === "/health") return json({ ok: true, now: new Date().toISOString() });
 
@@ -451,4 +461,48 @@ async function usersDelete(env, req){
   return json({ ok:true });
 }
 
+  /* ==========================
+   PENGELUARAN — endpoint baru
+   ========================== */
+
+// POST /api/pengeluaran
+async function pengeluaranAdd(env, req) {
+  const b = await bodyJSON(req);
+  if (!b || !b.nama || !b.jumlah)
+    return json({ error: "nama & jumlah required" }, 400);
+
+  const now = nowISO();
+
+  await env.BMT_DB.prepare(`
+    INSERT INTO pengeluaran (nama, kategori, jumlah, catatan, dibuat_oleh, created_at)
+    VALUES (?,?,?,?,?,?)
+  `).bind(
+    b.nama,
+    b.kategori || "",
+    Number(b.jumlah || 0),
+    b.catatan || "",
+    b.dibuat_oleh || "Admin",
+    now
+  ).run();
+
+  return json({ ok: true });
+}
+
+// GET /api/pengeluaran
+async function pengeluaranList(env) {
+  const r = await env.BMT_DB.prepare(`
+    SELECT * FROM pengeluaran ORDER BY created_at DESC
+  `).all();
+
+  return json({ items: r.results || [] });
+}
+
+// DELETE /api/pengeluaran/:id
+async function pengeluaranDelete(env, req) {
+  const id = Number(req.url.split("/").pop());
+  await env.BMT_DB.prepare(`DELETE FROM pengeluaran WHERE id=?`)
+    .bind(id)
+    .run();
+  return json({ ok: true });
+}
 /* End of file */
