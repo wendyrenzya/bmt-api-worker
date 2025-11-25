@@ -619,7 +619,7 @@ async function servisUpdateCatatan(env, request) {
   }
 
   // Update catatan di database
-  await env.DB
+  await env.BMT_DB
     .prepare("UPDATE servis SET catatan=? WHERE id_servis=?")
     .bind(body.catatan, id_servis)
     .run();
