@@ -75,6 +75,9 @@ export default {
       if (path.startsWith("/api/servis/batal/") && method === "PUT")
         return servisBatal(env, request);
 
+      if (path.startsWith("/api/servis/update_catatan/") && method === "PUT")
+  return servisUpdateCatatan(env, request);
+      
       // ==========================
       // RIWAYAT
       // ==========================
@@ -599,6 +602,31 @@ async function servisBatal(env, req) {
     .run();
 
   return json({ ok: true });
+}
+// ================================================
+// UPDATE CATATAN SERVIS
+// ================================================
+async function servisUpdateCatatan(env, request) {
+  const id_servis = Number(request.url.split("/").pop());
+  const body = await request.json();
+
+  // Validasi
+  if (!body || typeof body.catatan !== "string") {
+    return new Response(JSON.stringify({ error: "catatan_required" }), {
+      status: 400,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+
+  // Update catatan di database
+  await env.DB
+    .prepare("UPDATE servis SET catatan=? WHERE id_servis=?")
+    .bind(body.catatan, id_servis)
+    .run();
+
+  return new Response(JSON.stringify({ ok: true }), {
+    headers: { "Content-Type": "application/json" }
+  });
 }
 /* ==========================
    RIWAYAT
