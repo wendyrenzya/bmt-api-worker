@@ -6,7 +6,7 @@
 //   * updateBarang: if stock changed -> insert into stok_audit (or fallback to riwayat)
 //   * do NOT insert edit actions into edit_barang
 //   * remove edit_barang from riwayat aggregation
-// - Keeps all existing routes, bindings and behavior otherwise
+//   * ADD /api/pengeluaran (baru, aman, tidak ganggu endpoint lain)
 // ==========================================================
 
 export default {
@@ -62,21 +62,21 @@ export default {
       if (path.startsWith("/api/users/") && method === "DELETE") return usersDelete(env, request);
 
       // PENGELUARAN (BARU)
-if (path === "/api/pengeluaran" && method === "POST") 
-  return pengeluaranAdd(env, request);
+      if (path === "/api/pengeluaran" && method === "POST")
+        return pengeluaranAdd(env, request);
 
-if (path === "/api/pengeluaran" && method === "GET") 
-  return pengeluaranList(env);
+      if (path === "/api/pengeluaran" && method === "GET")
+        return pengeluaranList(env);
 
-if (path.startsWith("/api/pengeluaran/") && method === "DELETE") 
-  return pengeluaranDelete(env, request);
-      
-      // health fallback
-      if (path === "/api/health" || path === "/health") return json({ ok: true, now: new Date().toISOString() });
+      if (path.startsWith("/api/pengeluaran/") && method === "DELETE")
+        return pengeluaranDelete(env, request);
+
+      // HEALTH
+      if (path === "/api/health" || path === "/health")
+        return json({ ok: true, now: new Date().toISOString() });
 
       return json({ error: "Endpoint Not Found", path }, 404);
     } catch (err) {
-      // log message included in response to help debugging; remove in production if needed
       return json({ error: String(err) || "Server Error" }, 500);
     }
   }
@@ -101,7 +101,6 @@ async function bodyJSON(req) {
 }
 function nowISO() { return new Date().toISOString(); }
 function makeTID() {
-  // timestamp + random suffix — deterministic enough for human-readable id
   const d = new Date();
   const pad = n => String(n).padStart(2, "0");
   const ts = `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
@@ -110,7 +109,7 @@ function makeTID() {
 }
 
 /* ==========================
-   BARANG CRUD (keep as original behavior)
+   BARANG CRUD
    ========================== */
 async function listBarang(env){
   const rows = await env.BMT_DB.prepare(`SELECT * FROM barang ORDER BY nama ASC`).all();
@@ -141,8 +140,7 @@ async function addBarang(env, req){
     now
   ).run();
 
-  const insertedId = (r && r.lastRowId) ? r.lastRowId : null;
-  return json({ ok:true, id: insertedId || null });
+  return json({ ok:true, id: r.lastRowId || null });
 }
 async function deleteBarang(env, req){
   const id = Number(req.url.split("/").pop());
@@ -161,18 +159,16 @@ async function searchBarang(env, url){
 }
 async function listKategori(env){
   const rows = await env.BMT_DB.prepare(`SELECT DISTINCT kategori FROM barang ORDER BY kategori`).all();
-  const cats = (rows.results||[]).map(r=>r.kategori).filter(Boolean);
-  return json({ categories: cats });
+  return json({ categories: (rows.results||[]).map(r=>r.kategori).filter(Boolean) });
 }
 
 /* ==========================
-   STOK MASUK — patched (supports items[] and legacy single item)
+   STOK MASUK
    ========================== */
 async function stokMasuk(env, req){
   const b = await bodyJSON(req);
   if(!b) return json({ error:"body required" },400);
 
-  // normalize items
   let items = [];
   if (Array.isArray(b.items) && b.items.length) {
     items = b.items.map(it => ({
@@ -209,7 +205,7 @@ async function stokMasuk(env, req){
 }
 
 /* ==========================
-   STOK KELUAR / PENJUALAN (prefix PJL-)
+   STOK KELUAR / PENJUALAN
    ========================== */
 async function stokKeluar(env, req){
   const b = await bodyJSON(req);
@@ -222,8 +218,10 @@ async function stokKeluar(env, req){
 
   for(const it of items){
     if(!it.id) continue;
+
     const row = await env.BMT_DB.prepare(`SELECT stock FROM barang WHERE id=?`).bind(it.id).first();
     if(!row) continue;
+
     const newStock = Number(row.stock||0) - Number(it.jumlah || 0);
 
     await env.BMT_DB.prepare(`UPDATE barang SET stock=? WHERE id=?`).bind(newStock, it.id).run();
@@ -238,7 +236,7 @@ async function stokKeluar(env, req){
 }
 
 /* ==========================
-   STOK AUDIT (POST) — prefix AUD-
+   STOK AUDIT
    ========================== */
 async function stokAudit(env, req){
   const b = await bodyJSON(req);
@@ -254,31 +252,25 @@ async function stokAudit(env, req){
 
   await env.BMT_DB.prepare(`UPDATE barang SET stock=? WHERE id=?`).bind(newStock, b.barang_id).run();
 
-  // insert into stok_audit if exists; otherwise fallback to riwayat insert
   try {
     await env.BMT_DB.prepare(`
       INSERT INTO stok_audit(barang_id,stok_lama,stok_baru,keterangan,dibuat_oleh,created_at,transaksi_id)
       VALUES (?,?,?,?,?,?,?)
     `).bind(b.barang_id, oldStock, newStock, b.keterangan || "", operator, now, tid).run();
   } catch(e) {
-    // fallback: insert into riwayat (if table exists in schema)
     try {
       await env.BMT_DB.prepare(`
         INSERT INTO riwayat(tipe,barang_id,barang_nama,jumlah,catatan,dibuat_oleh,created_at,transaksi_id)
         VALUES (?,?,?,?,?,?,?,?)
       `).bind('audit', b.barang_id, '', newStock - oldStock, b.keterangan || "", operator, now, tid).run();
-    } catch(_) {
-      // last resort: swallow, but return ok — we don't want to crash the worker
-    }
+    } catch(_) {}
   }
 
   return json({ ok:true, transaksi_id: tid });
 }
 
 /* ==========================
-   UPDATE BARANG — patched
-   - If stock changed: create stok_audit (or fallback)
-   - Do NOT insert into edit_barang
+   UPDATE BARANG
    ========================== */
 async function updateBarang(env, req){
   const url = new URL(req.url);
@@ -294,7 +286,6 @@ async function updateBarang(env, req){
   const operator = body.dibuat_oleh || body.operator || "Admin";
   const now = nowISO();
 
-  // detect stock change -> create stok_audit (AUD-...)
   if (body.stock !== undefined && Number(body.stock) !== Number(old.stock)) {
     const tidAudit = "AUD-" + makeTID();
 
@@ -306,19 +297,15 @@ async function updateBarang(env, req){
         VALUES (?,?,?,?,?,?,?)
       `).bind(id, Number(old.stock||0), Number(body.stock), body.keterangan || "", operator, now, tidAudit).run();
     } catch(e) {
-      // fallback to riwayat insert (if no stok_audit table)
       try {
         await env.BMT_DB.prepare(`
           INSERT INTO riwayat(tipe,barang_id,barang_nama,jumlah,catatan,dibuat_oleh,created_at,transaksi_id)
           VALUES (?,?,?,?,?,?,?,?)
         `).bind('audit', id, old.nama || "", Number(body.stock) - Number(old.stock || 0), body.keterangan || "", operator, now, tidAudit).run();
-      } catch(_) {
-        // swallow to avoid worker crash
-      }
+      } catch(_) {}
     }
   }
 
-  // update other editable fields but DO NOT record edits in edit_barang
   const editable = ["nama","harga","harga_modal","kategori","foto","deskripsi"];
   const sets = []; const vals = [];
   for(const f of editable){
@@ -333,9 +320,8 @@ async function updateBarang(env, req){
 }
 
 /* ==========================
-   RIWAYAT — exclude edit_barang entirely
+   RIWAYAT FIXED — **NO DUPLICATE**
    ========================== */
-async function riwayatAll(env, req){
 async function riwayatAll(env, req){
   const url = req instanceof URL ? req : new URL(req.url);
   const limit = Number(url.searchParams.get("limit") || 50);
@@ -370,24 +356,26 @@ async function riwayatDetail(env, req){
     masuk: rows.filter(x => x.tipe === 'masuk'),
     keluar: rows.filter(x => x.tipe === 'keluar'),
     audit: rows.filter(x => x.tipe === 'audit'),
-    edits: [] // kamu memang mau hide edit
+    edits: []
   });
 }
 
 /* ==========================
-   per-barang history
+   PER-BARANG HISTORY
    ========================== */
 async function riwayatBarang(env, req){
   const id = Number(req.url.split("/").pop());
+
   const masuk = await env.BMT_DB.prepare(`SELECT * FROM stok_masuk WHERE barang_id=? ORDER BY created_at DESC`).bind(id).all();
   const keluar = await env.BMT_DB.prepare(`SELECT * FROM stok_keluar WHERE barang_id=? ORDER BY created_at DESC`).bind(id).all();
+
   let audit;
   try {
     audit = await env.BMT_DB.prepare(`SELECT * FROM stok_audit WHERE barang_id=? ORDER BY created_at DESC`).bind(id).all();
     audit = audit.results || [];
   } catch(e) {
-    const r = await env.BMT_DB.prepare(`SELECT * FROM riwayat WHERE barang_id=? ORDER BY created_at DESC`).bind(id).all().catch(()=>({ results: [] }));
-    audit = (r.results || []).filter(x=> x.tipe === 'audit');
+    const fallback = await env.BMT_DB.prepare(`SELECT * FROM riwayat WHERE barang_id=? ORDER BY created_at DESC`).bind(id).all().catch(()=>({ results: [] }));
+    audit = (fallback.results || []).filter(x=> x.tipe === 'audit');
   }
 
   return json({
@@ -399,7 +387,7 @@ async function riwayatBarang(env, req){
 }
 
 /* ==========================
-   MESSAGE / SETTINGS / USERS (kept original behavior)
+   MESSAGE / SETTINGS / USERS
    ========================== */
 async function messageGet(env){
   const rows = await env.BMT_DB.prepare(`SELECT * FROM messages ORDER BY created_at DESC LIMIT 100`).all();
@@ -452,7 +440,10 @@ async function usersUpdate(env, req){
   const b = await bodyJSON(req);
   const sets=[]; const vals=[];
   ["username","role"].forEach(k=>{ if(b[k]!==undefined){ sets.push(`${k}=?`); vals.push(b[k]); }});
-  if(sets.length){ vals.push(id); await env.BMT_DB.prepare(`UPDATE users SET ${sets.join(",")} WHERE id=?`).bind(...vals).run(); }
+  if(sets.length){
+    vals.push(id);
+    await env.BMT_DB.prepare(`UPDATE users SET ${sets.join(",")} WHERE id=?`).bind(...vals).run();
+  }
   return json({ ok:true });
 }
 async function usersDelete(env, req){
@@ -461,11 +452,9 @@ async function usersDelete(env, req){
   return json({ ok:true });
 }
 
-  /* ==========================
+/* ==========================
    PENGELUARAN — endpoint baru
    ========================== */
-
-// POST /api/pengeluaran
 async function pengeluaranAdd(env, req) {
   const b = await bodyJSON(req);
   if (!b || !b.nama || !b.jumlah)
@@ -488,7 +477,6 @@ async function pengeluaranAdd(env, req) {
   return json({ ok: true });
 }
 
-// GET /api/pengeluaran
 async function pengeluaranList(env) {
   const r = await env.BMT_DB.prepare(`
     SELECT * FROM pengeluaran ORDER BY created_at DESC
@@ -497,7 +485,6 @@ async function pengeluaranList(env) {
   return json({ items: r.results || [] });
 }
 
-// DELETE /api/pengeluaran/:id
 async function pengeluaranDelete(env, req) {
   const id = Number(req.url.split("/").pop());
   await env.BMT_DB.prepare(`DELETE FROM pengeluaran WHERE id=?`)
@@ -505,4 +492,5 @@ async function pengeluaranDelete(env, req) {
     .run();
   return json({ ok: true });
 }
+
 /* End of file */
