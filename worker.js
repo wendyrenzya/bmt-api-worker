@@ -57,37 +57,37 @@ export default {
       if (path === "/api/stok_audit" && method === "POST")
         return stokAudit(env, request);
 
-      // ==========================
-// SERVIS (FINAL, FIXED ORDER)
 // ==========================
+      // SERVIS (FINAL ORDER FIX)
+      // ==========================
 
-// 1) UPDATE CATATAN → HARUS PALING ATAS
-if (path.startsWith("/api/servis/update_catatan/") && method === "PUT")
-  return servisUpdateCatatan(env, request);
+      // 1) ENDPOINT BARU — SIMPAN ALASAN PEMBATALAN
+      if (path.startsWith("/api/servis/alasan/") && method === "PUT")
+        return servisUpdateAlasan(env, request);
 
-// 2) UPDATE BIAYA SERVIS
-if (path.startsWith("/api/servis/update_cost/") && method === "PUT")
-  return servisUpdateBiaya(env, request);
+      // 2) UPDATE BIAYA SERVIS
+      if (path.startsWith("/api/servis/update_cost/") && method === "PUT")
+        return servisUpdateBiaya(env, request);
 
-// 3) SELESAI SERVIS
-if (path.startsWith("/api/servis/selesai/") && method === "PUT")
-  return servisSelesai(env, request);
+      // 3) SELESAI SERVIS
+      if (path.startsWith("/api/servis/selesai/") && method === "PUT")
+        return servisSelesai(env, request);
 
-// 4) BATAL SERVIS
-if (path.startsWith("/api/servis/batal/") && method === "PUT")
-  return servisBatal(env, request);
+      // 4) BATAL SERVIS
+      if (path.startsWith("/api/servis/batal/") && method === "PUT")
+        return servisBatal(env, request);
 
-// 5) LIST SERVIS
-if (path === "/api/servis" && method === "GET")
-  return servisList(env);
+      // 5) LIST SERVIS
+      if (path === "/api/servis" && method === "GET")
+        return servisList(env);
 
-// 6) TAMBAH SERVIS
-if (path === "/api/servis" && method === "POST")
-  return servisAdd(env, request);
+      // 6) TAMBAH SERVIS
+      if (path === "/api/servis" && method === "POST")
+        return servisAdd(env, request);
 
-// 7) DETAIL SERVIS (CATCH-ALL) — HARUS PALING BAWAH
-if (path.startsWith("/api/servis/") && method === "GET")
-  return servisDetail(env, request);
+      // 7) DETAIL SERVIS (PASTI PALING BAWAH)
+      if (path.startsWith("/api/servis/") && method === "GET")
+        return servisDetail(env, request);
 
       // ==========================
       // RIWAYAT
