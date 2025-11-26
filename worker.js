@@ -90,15 +90,6 @@ if (path.startsWith("/api/servis/") && method === "GET")
   return servisDetail(env, request);
 
       // ==========================
-      // PATCH BARU — UPDATE CATATAN & BIAYA
-      // ==========================
-      if (path.startsWith("/api/servis/update_catatan/") && method === "PUT")
-        return servisUpdateCatatan(env, request);
-
-      if (path.startsWith("/api/servis/update_cost/") && method === "PUT")
-        return servisUpdateBiaya(env, request);
-
-      // ==========================
       // RIWAYAT
       // ==========================
       if (path === "/api/riwayat" && method === "GET")
