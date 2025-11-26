@@ -346,7 +346,8 @@ async function stokMasuk(env, req) {
       )
       .bind(it.id, it.jumlah, it.keterangan, operator, now, tid)
       .run();
-    // PATCH RIWAYAT — STOK MASUK (KOMPATIBEL)
+
+// PATCH RIWAYAT — STOK MASUK (KOMPATIBEL)
 await env.BMT_DB.prepare(
   `INSERT INTO riwayat(
     tipe,
@@ -424,8 +425,8 @@ async function stokKeluar(env, req) {
         tid
       )
       .run();
-    // PATCH RIWAYAT — STOK KELUAR
-    // PATCH RIWAYAT — STOK KELUAR (KOMPATIBEL)
+    
+// PATCH RIWAYAT — STOK KELUAR (KOMPATIBEL)
 await env.BMT_DB.prepare(
   `INSERT INTO riwayat(
     tipe,
@@ -498,32 +499,30 @@ async function stokAudit(env, req) {
       tid
     )
     .run();
-// // PATCH RIWAYAT — AUDIT (FINAL KOMPATIBEL)
-await env.BMT_DB.prepare(
-  `INSERT INTO riwayat(
-     tipe,
-     barang_id,
-     barang_nama,
-     jumlah,
-     harga,
-     harga_modal,
-     catatan,
-     dibuat_oleh,
-     created_at,
-     transaksi_id
-   ) VALUES (?,?,?,?,?,?,?,?,?,?)`
-).bind(
-  "audit",                                      // WAJIB → supaya tampil sebagai AUDIT
-  b.barang_id,                                  // id barang yang diaudit
-  "",                                            // barang_nama → kosong aman
-  newStock - oldStock,                           // selisih (+ naik, - turun)
-  0,                                             // harga → audit tidak punya harga
-  0,                                             // harga_modal → audit tidak pakai ini
-  b.keterangan || "",                            // catatan audit
-  operator,                                      // dibuat_oleh
-  now,                                           // waktu audit
-  tid                                            // transaksi_id audit
-).run();
+
+// PATCH RIWAYAT — AUDIT (FINAL KOMPATIBEL)
+await env.BMT_DB
+  .prepare(
+    `INSERT INTO riwayat(
+      transaksi_id, tipe, barang_id,
+      jumlah, harga,
+      dibuat_oleh, keterangan, created_at,
+      stok_lama, stok_baru
+    ) VALUES (?,?,?,?,?,?,?,?,?,?)`
+  )
+  .bind(
+    tid,
+    "audit",
+    b.barang_id,
+    newStock - oldStock,  // selisih, tetap disimpan
+    0,
+    operator,
+    b.keterangan || "",
+    now,
+    oldStock,
+    newStock
+  )
+  .run();
   return json({ ok: true });
     }
 ////////////////////////////////////////////////////
