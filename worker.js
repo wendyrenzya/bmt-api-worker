@@ -478,6 +478,8 @@ async function stokAudit(env, req) {
   const oldStock = Number(oldRow?.stock || 0);
   const newStock = Number(b.stok_baru || b.stock || 0);
 
+  console.log("AUDIT_DEBUG", tid, oldStock, newStock);
+ 
   await env.BMT_DB
     .prepare(`UPDATE barang SET stock=? WHERE id=?`)
     .bind(newStock, b.barang_id)
