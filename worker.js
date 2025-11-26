@@ -66,6 +66,9 @@ export default {
       if (path === "/api/servis" && method === "POST")
         return servisAdd(env, request);
 
+      if (path.startsWith("/api/servis/update_catatan/") && method === "PUT")
+  return servisUpdateCatatan(env, request);
+      
       if (path.startsWith("/api/servis/") && method === "GET")
         return servisDetail(env, request);
 
@@ -75,8 +78,7 @@ export default {
       if (path.startsWith("/api/servis/batal/") && method === "PUT")
         return servisBatal(env, request);
 
-      if (path.startsWith("/api/servis/update_catatan/") && method === "PUT")
-  return servisUpdateCatatan(env, request);
+      
       
       // ==========================
       // RIWAYAT
