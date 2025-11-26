@@ -60,25 +60,30 @@ export default {
       // ==========================
       // SERVIS (BARU)
       // ==========================
-      if (path === "/api/servis" && method === "GET")
-        return servisList(env);
+  // ==========================
+// SERVIS (BENAR)
+// ==========================
+if (path === "/api/servis" && method === "GET")
+  return servisList(env);
 
-      if (path === "/api/servis" && method === "POST")
-        return servisAdd(env, request);
+if (path === "/api/servis" && method === "POST")
+  return servisAdd(env, request);
 
-      if (path.startsWith("/api/servis/update_catatan/") && method === "PUT")
+// 1. Update Catatan
+if (path.startsWith("/api/servis/update_catatan/") && method === "PUT")
   return servisUpdateCatatan(env, request);
-      
-      if (path.startsWith("/api/servis/") && method === "GET")
-        return servisDetail(env, request);
 
-      if (path.startsWith("/api/servis/selesai/") && method === "PUT")
-        return servisSelesai(env, request);
+// 2. Selesai
+if (path.startsWith("/api/servis/selesai/") && method === "PUT")
+  return servisSelesai(env, request);
 
-      if (path.startsWith("/api/servis/batal/") && method === "PUT")
-        return servisBatal(env, request);
+// 3. Batal
+if (path.startsWith("/api/servis/batal/") && method === "PUT")
+  return servisBatal(env, request);
 
-      
+// 4. DETAIL (harus terakhir untuk menghindari override)
+if (path.startsWith("/api/servis/") && method === "GET")
+  return servisDetail(env, request);
       
       // ==========================
       // RIWAYAT
