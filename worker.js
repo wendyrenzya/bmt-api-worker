@@ -346,25 +346,32 @@ async function stokMasuk(env, req) {
       )
       .bind(it.id, it.jumlah, it.keterangan, operator, now, tid)
       .run();
-    // PATCH RIWAYAT — STOK MASUK
-await env.BMT_DB
-  .prepare(
-    `INSERT INTO riwayat(
-      transaksi_id, tipe, barang_id, jumlah, harga,
-      dibuat_oleh, keterangan, created_at
-    ) VALUES (?,?,?,?,?,?,?,?)`
-  )
-  .bind(
-    tid,
-    "masuk",
-    it.id,
-    it.jumlah,
-    0, // stok masuk tidak ada harga
-    operator,
-    it.keterangan || "",
-    now
-  )
-  .run();
+    // PATCH RIWAYAT — STOK MASUK (KOMPATIBEL)
+await env.BMT_DB.prepare(
+  `INSERT INTO riwayat(
+    tipe,
+    barang_id,
+    barang_nama,
+    jumlah,
+    harga,
+    harga_modal,
+    catatan,
+    dibuat_oleh,
+    created_at,
+    transaksi_id
+  ) VALUES (?,?,?,?,?,?,?,?,?,?)`
+).bind(
+  "masuk",
+  it.id,
+  it.nama || "",
+  it.jumlah,
+  0,
+  0,
+  it.keterangan || "",
+  operator,
+  now,
+  tid
+).run();
   }
 
   return json({ ok: true, transaksi_id: tid });
@@ -418,24 +425,32 @@ async function stokKeluar(env, req) {
       )
       .run();
     // PATCH RIWAYAT — STOK KELUAR
-await env.BMT_DB
-  .prepare(
-    `INSERT INTO riwayat(
-      transaksi_id, tipe, barang_id, jumlah, harga,
-      dibuat_oleh, keterangan, created_at
-    ) VALUES (?,?,?,?,?,?,?,?)`
-  )
-  .bind(
-    tid,
-    "keluar",
-    it.id,
-    it.jumlah || it.qty || 0,
-    it.harga || 0,
-    operator,
-    it.keterangan || "",
-    now
-  )
-  .run();
+    // PATCH RIWAYAT — STOK KELUAR (KOMPATIBEL)
+await env.BMT_DB.prepare(
+  `INSERT INTO riwayat(
+    tipe,
+    barang_id,
+    barang_nama,
+    jumlah,
+    harga,
+    harga_modal,
+    catatan,
+    dibuat_oleh,
+    created_at,
+    transaksi_id
+  ) VALUES (?,?,?,?,?,?,?,?,?,?)`
+).bind(
+  "keluar",
+  it.id,
+  it.nama || "",           // ← WAJIB ADA, STRING KOSONG AMAN
+  it.jumlah || it.qty || 0,
+  it.harga || 0,
+  0,                       // harga_modal
+  it.keterangan || "",     // catatan, kolom WAJIB DIISI
+  operator,
+  now,
+  tid
+).run();
   }
 
   return json({ ok: true, transaksi_id: tid });
@@ -483,25 +498,32 @@ async function stokAudit(env, req) {
       tid
     )
     .run();
-// PATCH RIWAYAT — AUDIT
-await env.BMT_DB
-  .prepare(
-    `INSERT INTO riwayat(
-      transaksi_id, tipe, barang_id, jumlah, harga,
-      dibuat_oleh, keterangan, created_at
-    ) VALUES (?,?,?,?,?,?,?,?)`
-  )
-  .bind(
-    tid,
-    "audit",
-    b.barang_id,
-    Number(b.stok_baru || b.stock || 0) - oldStock,
-    0,
-    operator,
-    b.keterangan || "",
-    now
-  )
-  .run();
+// PATCH RIWAYAT — AUDIT (KOMPATIBEL)
+await env.BMT_DB.prepare(
+  `INSERT INTO riwayat(
+    tipe,
+    barang_id,
+    barang_nama,
+    jumlah,
+    harga,
+    harga_modal,
+    catatan,
+    dibuat_oleh,
+    created_at,
+    transaksi_id
+  ) VALUES (?,?,?,?,?,?,?,?,?,?)`
+).bind(
+  "audit",
+  b.barang_id,
+  "",                                   // tidak ada nama → kosongkan aja
+  Number(b.stok_baru || b.stock || 0) - oldStock,
+  0,
+  0,
+  b.keterangan || "",
+  operator,
+  now,
+  tid
+).run();
   return json({ ok: true });
     }
 ////////////////////////////////////////////////////
