@@ -498,31 +498,31 @@ async function stokAudit(env, req) {
       tid
     )
     .run();
-// PATCH RIWAYAT — AUDIT (KOMPATIBEL)
+// // PATCH RIWAYAT — AUDIT (FINAL KOMPATIBEL)
 await env.BMT_DB.prepare(
   `INSERT INTO riwayat(
-    tipe,
-    barang_id,
-    barang_nama,
-    jumlah,
-    harga,
-    harga_modal,
-    catatan,
-    dibuat_oleh,
-    created_at,
-    transaksi_id
-  ) VALUES (?,?,?,?,?,?,?,?,?,?)`
+     tipe,
+     barang_id,
+     barang_nama,
+     jumlah,
+     harga,
+     harga_modal,
+     catatan,
+     dibuat_oleh,
+     created_at,
+     transaksi_id
+   ) VALUES (?,?,?,?,?,?,?,?,?,?)`
 ).bind(
-  "audit",
-  b.barang_id,
-  "",                                   // tidak ada nama → kosongkan aja
-  Number(b.stok_baru || b.stock || 0) - oldStock,
-  0,
-  0,
-  b.keterangan || "",
-  operator,
-  now,
-  tid
+  "audit",                                      // WAJIB → supaya tampil sebagai AUDIT
+  b.barang_id,                                  // id barang yang diaudit
+  "",                                            // barang_nama → kosong aman
+  newStock - oldStock,                           // selisih (+ naik, - turun)
+  0,                                             // harga → audit tidak punya harga
+  0,                                             // harga_modal → audit tidak pakai ini
+  b.keterangan || "",                            // catatan audit
+  operator,                                      // dibuat_oleh
+  now,                                           // waktu audit
+  tid                                            // transaksi_id audit
 ).run();
   return json({ ok: true });
     }
