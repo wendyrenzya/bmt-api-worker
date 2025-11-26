@@ -81,6 +81,10 @@ export default {
       if (path === "/api/servis" && method === "POST")
         return servisAdd(env, request);
 
+      // 6b) UPDATE ITEMS SERVIS
+      if (path.startsWith("/api/servis/update_items/") && method === "PUT")
+        return servisUpdateItems(env, request);
+      
       // 7) DETAIL SERVIS (PALING BAWAH WAJIB)
       if (path.startsWith("/api/servis/") && method === "GET")
         return servisDetail(env, request);
@@ -535,6 +539,40 @@ async function servisUpdateBiaya(env, req) {
   await env.BMT_DB
     .prepare(`UPDATE servis SET biaya_servis=? WHERE id_servis=?`)
     .bind(Number(b.biaya_servis || 0), id_servis)
+    .run();
+
+  return json({ ok: true });
+}
+
+// ==========================================================
+// 6b) UPDATE ITEMS SERVIS (ENDPOINT BARU)
+// ==========================================================
+async function servisUpdateItems(env, req) {
+  const id_servis = Number(req.url.split("/").pop());
+  const b = await bodyJSON(req);
+
+  if (!Array.isArray(b.items)) {
+    return json({ error: "items[] required" }, 400);
+  }
+
+  const row = await env.BMT_DB
+    .prepare(`SELECT * FROM servis WHERE id_servis=?`)
+    .bind(id_servis)
+    .first();
+
+  if (!row) {
+    return json({ error: "servis not found" }, 404);
+  }
+
+  if (row.status === "selesai" || row.status === "batal") {
+    return json({ error: "servis is locked" }, 400);
+  }
+
+  const itemsJson = JSON.stringify(b.items || []);
+
+  await env.BMT_DB
+    .prepare(`UPDATE servis SET items=? WHERE id_servis=?`)
+    .bind(itemsJson, id_servis)
     .run();
 
   return json({ ok: true });
