@@ -708,7 +708,13 @@ async function riwayatDetail(env, req) {
     transaksi_id: tid,
     masuk: rows.filter(x => x.tipe === "masuk"),
     keluar: rows.filter(x => x.tipe === "keluar"),
-    audit: rows.filter(x => x.tipe === "audit"),
+    audit: rows
+  .filter(x => x.tipe === "audit")
+  .map(x => ({
+    ...x,
+    stok_lama: x.stok_lama ?? null,
+    stok_baru: x.stok_baru ?? null
+  })),
     edits: [],
   });
 }
