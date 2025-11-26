@@ -8,7 +8,6 @@ export default {
       return new Response(null, { status: 204, headers: corsHeaders() });
 
     try {
-
       // ==========================
       // BARANG
       // ==========================
@@ -21,23 +20,12 @@ export default {
       if (path.startsWith("/api/barang/") && method === "GET")
         return getBarang(env, request);
 
-      if (
-        path.startsWith("/api/barang/") &&
-        (method === "PUT" || method === "PATCH")
-      )
+      if (path.startsWith("/api/barang/") &&
+          (method === "PUT" || method === "PATCH"))
         return updateBarang(env, request);
 
       if (path.startsWith("/api/barang/") && method === "DELETE")
         return deleteBarang(env, request);
-
-      // ==========================
-      // SEARCH / KATEGORI
-      // ==========================
-      if (path === "/api/barang_search" && method === "GET")
-        return searchBarang(env, url);
-
-      if (path === "/api/kategori" && method === "GET")
-        return listKategori(env);
 
       // ==========================
       // STOK MASUK
@@ -46,7 +34,7 @@ export default {
         return stokMasuk(env, request);
 
       // ==========================
-      // STOK KELUAR (PENJUALAN)
+      // STOK KELUAR
       // ==========================
       if (path === "/api/stok_keluar" && method === "POST")
         return stokKeluar(env, request);
@@ -57,7 +45,15 @@ export default {
       if (path === "/api/stok_audit" && method === "POST")
         return stokAudit(env, request);
 
-// ==========================
+      // ==========================
+      // SEARCH / KATEGORI
+      // ==========================
+      if (path === "/api/barang_search" && method === "GET")
+        return searchBarang(env, url);
+
+      if (path === "/api/kategori" && method === "GET")
+        return listKategori(env);
+      // ==========================
       // SERVIS (FINAL ORDER FIX)
       // ==========================
 
@@ -85,7 +81,7 @@ export default {
       if (path === "/api/servis" && method === "POST")
         return servisAdd(env, request);
 
-      // 7) DETAIL SERVIS (PASTI PALING BAWAH)
+      // 7) DETAIL SERVIS (PALING BAWAH WAJIB)
       if (path.startsWith("/api/servis/") && method === "GET")
         return servisDetail(env, request);
 
@@ -162,13 +158,12 @@ export default {
         return json({ ok: true, now: new Date().toISOString() });
 
       return json({ error: "Endpoint Not Found", path }, 404);
+
     } catch (err) {
       return json({ error: String(err) || "Server Error" }, 500);
     }
   }
 };
-<<< PART 2/3 START >>>
-
 //////////////////////////////
 // Utilities
 //////////////////////////////
@@ -176,8 +171,7 @@ export default {
 function corsHeaders() {
   return {
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods":
-      "GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS",
+    "Access-Control-Allow-Methods": "GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
     "Content-Type": "application/json;charset=UTF-8"
   };
@@ -239,12 +233,11 @@ async function addBarang(env, req) {
 
   const now = nowISO();
   const r = await env.BMT_DB
-    .prepare(
-      `
-    INSERT INTO barang (kode_barang,nama,kategori,harga,harga_modal,stock,foto,deskripsi,created_at)
-    VALUES (?,?,?,?,?,?,?,?,?)
-  `
-    )
+    .prepare(`
+    INSERT INTO barang (
+      kode_barang, nama, kategori, harga, harga_modal, stock, foto, deskripsi, created_at
+    ) VALUES (?,?,?,?,?,?,?,?,?)
+  `)
     .bind(
       b.kode_barang || "KB" + Date.now().toString().slice(-6),
       b.nama,
@@ -343,11 +336,9 @@ async function stokMasuk(env, req) {
 
     await env.BMT_DB
       .prepare(
-        `
-      INSERT INTO stok_masuk(
+        `INSERT INTO stok_masuk(
         barang_id,jumlah,keterangan,dibuat_oleh,created_at,transaksi_id
-      ) VALUES (?,?,?,?,?,?)
-    `
+      ) VALUES (?,?,?,?,?,?)`
       )
       .bind(it.id, it.jumlah, it.keterangan, operator, now, tid)
       .run();
@@ -368,7 +359,6 @@ async function stokKeluar(env, req) {
   const items = b.items;
   const operator = b.dibuat_oleh || b.operator || "Admin";
   const now = nowISO();
-
   const tid = b.transaksi_id || "PJL-" + makeTID();
 
   for (const it of items) {
@@ -390,11 +380,9 @@ async function stokKeluar(env, req) {
 
     await env.BMT_DB
       .prepare(
-        `
-      INSERT INTO stok_keluar(
+        `INSERT INTO stok_keluar(
         barang_id,jumlah,harga,dibuat_oleh,keterangan,created_at,transaksi_id
-      ) VALUES (?,?,?,?,?,?,?)
-    `
+      ) VALUES (?,?,?,?,?,?,?)`
       )
       .bind(
         it.id,
@@ -428,6 +416,7 @@ async function stokAudit(env, req) {
     .prepare(`SELECT stock FROM barang WHERE id=?`)
     .bind(b.barang_id)
     .first();
+
   const oldStock = Number(oldRow?.stock || 0);
   const newStock = Number(b.stok_baru || b.stock || 0);
 
@@ -438,11 +427,9 @@ async function stokAudit(env, req) {
 
   await env.BMT_DB
     .prepare(
-      `
-    INSERT INTO stok_audit(
+      `INSERT INTO stok_audit(
       barang_id,stok_lama,stok_baru,keterangan,dibuat_oleh,created_at,transaksi_id
-    ) VALUES (?,?,?,?,?,?,?)
-  `
+    ) VALUES (?,?,?,?,?,?,?)`
     )
     .bind(
       b.barang_id,
@@ -455,12 +442,11 @@ async function stokAudit(env, req) {
     )
     .run();
 
-  return json({ ok: true, transaksi_id: tid });
-}
-
-//////////////////////////////
-// SERVIS
-//////////////////////////////
+  return json({ ok: true });
+    }
+////////////////////////////////////////////////////
+// SERVIS HANDLERS (FIXED VERSION)
+////////////////////////////////////////////////////
 
 async function servisList(env) {
   const rows = await env.BMT_DB
@@ -471,25 +457,21 @@ async function servisList(env) {
 
 async function servisAdd(env, req) {
   const b = await bodyJSON(req);
-
   if (!b || !b.nama_servis)
     return json({ error: "nama_servis required" }, 400);
 
   const transaksi_id = b.transaksi_id || "SRV-" + makeTID();
   const now = nowISO();
-
   const itemsJson = JSON.stringify(b.items || []);
 
   const r = await env.BMT_DB
-    .prepare(
-      `
-    INSERT INTO servis (
-      nama_servis, teknisi, biaya_servis, catatan,
-      items, status, transaksi_id, created_at
-    )
-    VALUES (?,?,?,?,?,?,?,?)
-  `
-    )
+    .prepare(`
+      INSERT INTO servis (
+        nama_servis, teknisi, biaya_servis, catatan,
+        items, status, transaksi_id, created_at
+      )
+      VALUES (?,?,?,?,?,?,?,?)
+    `)
     .bind(
       b.nama_servis,
       b.teknisi || "",
@@ -502,11 +484,7 @@ async function servisAdd(env, req) {
     )
     .run();
 
-  return json({
-    ok: true,
-    id_servis: r.lastRowId,
-    transaksi_id,
-  });
+  return json({ ok: true, id_servis: r.lastRowId, transaksi_id });
 }
 
 async function servisDetail(env, req) {
@@ -520,7 +498,7 @@ async function servisDetail(env, req) {
 
   try {
     row.items = row.items ? JSON.parse(row.items) : [];
-  } catch (e) {
+  } catch {
     row.items = [];
   }
 
@@ -529,83 +507,18 @@ async function servisDetail(env, req) {
 
 async function servisSelesai(env, req) {
   const id_servis = Number(req.url.split("/").pop());
-  const svc = await env.BMT_DB
-    .prepare(`SELECT * FROM servis WHERE id_servis=?`)
-    .bind(id_servis)
-    .first();
-
-  if (!svc) return json({ error: "Servis not found" }, 404);
-  if (svc.status === "selesai")
-    return json({ ok: true, msg: "Already selesai" });
-
-  let items = [];
-  try {
-    items = svc.items ? JSON.parse(svc.items) : [];
-  } catch (e) {
-    items = [];
-  }
-
-  const transaksi_id = svc.transaksi_id || "SRV-" + makeTID();
-  const operator = svc.teknisi || "Admin";
   const now = nowISO();
 
-  for (const it of items) {
-    const id = Number(it.id);
-    const qty = Number(it.qty || 0);
-    if (!id || qty <= 0) continue;
-
-    const row = await env.BMT_DB
-      .prepare(`SELECT stock FROM barang WHERE id=?`)
-      .bind(id)
-      .first();
-    const oldStock = row ? Number(row.stock || 0) : 0;
-    const newStock = oldStock - qty;
-
-    await env.BMT_DB
-      .prepare(`UPDATE barang SET stock=? WHERE id=?`)
-      .bind(newStock, id)
-      .run();
-
-    await env.BMT_DB
-      .prepare(
-        `
-      INSERT INTO stok_keluar(
-        barang_id,jumlah,harga,dibuat_oleh,keterangan,created_at,transaksi_id
-      ) VALUES (?,?,?,?,?,?,?)
-    `
-      )
-      .bind(
-        id,
-        qty,
-        Number(it.harga || 0),
-        operator,
-        it.keterangan || "",
-        now,
-        transaksi_id
-      )
-      .run();
-  }
-
   await env.BMT_DB
-    .prepare(
-      `UPDATE servis SET status='selesai', selesai_at=? WHERE id_servis=?`
-    )
+    .prepare(`UPDATE servis SET status='selesai', selesai_at=? WHERE id_servis=?`)
     .bind(now, id_servis)
     .run();
 
-  return json({ ok: true, transaksi_id });
+  return json({ ok: true });
 }
 
 async function servisBatal(env, req) {
   const id_servis = Number(req.url.split("/").pop());
-  const svc = await env.BMT_DB
-    .prepare(`SELECT * FROM servis WHERE id_servis=?`)
-    .bind(id_servis)
-    .first();
-
-  if (!svc) return json({ error: "Servis not found" }, 404);
-  if (svc.status === "batal")
-    return json({ ok: true, msg: "Already batal" });
 
   await env.BMT_DB
     .prepare(`UPDATE servis SET status='batal' WHERE id_servis=?`)
@@ -614,26 +527,6 @@ async function servisBatal(env, req) {
 
   return json({ ok: true });
 }
-
-//////////////////////////////
-// PATCH BARU – UPDATE CATATAN
-//////////////////////////////
-
-async function servisUpdateCatatan(env, req) {
-  const id_servis = Number(req.url.split("/").pop());
-  const b = await bodyJSON(req);
-
-  await env.BMT_DB
-    .prepare(`UPDATE servis SET catatan=? WHERE id_servis=?`)
-    .bind(b.catatan || "", id_servis)
-    .run();
-
-  return json({ ok: true });
-}
-
-//////////////////////////////
-// PATCH BARU – UPDATE BIAYA SERVIS
-//////////////////////////////
 
 async function servisUpdateBiaya(env, req) {
   const id_servis = Number(req.url.split("/").pop());
@@ -646,8 +539,19 @@ async function servisUpdateBiaya(env, req) {
 
   return json({ ok: true });
 }
-<<< PART 3/3 START >>>
 
+/////// ENDPOINT BARU — ALASAN BATAL ///////
+async function servisUpdateAlasan(env, req) {
+  const id_servis = Number(req.url.split("/").pop());
+  const b = await bodyJSON(req);
+
+  await env.BMT_DB
+    .prepare(`UPDATE servis SET alasan_batal=? WHERE id_servis=?`)
+    .bind(b.alasan || "", id_servis)
+    .run();
+
+  return json({ ok: true });
+}
 //////////////////////////////
 // RIWAYAT
 //////////////////////////////
@@ -657,15 +561,13 @@ async function riwayatAll(env, url) {
   const offset = Number(url.searchParams.get("offset") || 0);
 
   const rows = await env.BMT_DB
-    .prepare(
-      `
-    SELECT transaksi_id, MIN(created_at) AS waktu
-    FROM riwayat
-    GROUP BY transaksi_id
-    ORDER BY waktu DESC
-    LIMIT ? OFFSET ?
-  `
-    )
+    .prepare(`
+      SELECT transaksi_id, MIN(created_at) AS waktu
+      FROM riwayat
+      GROUP BY transaksi_id
+      ORDER BY waktu DESC
+      LIMIT ? OFFSET ?
+    `)
     .bind(limit, offset)
     .all();
 
@@ -676,14 +578,11 @@ async function riwayatDetail(env, req) {
   const tid = decodeURIComponent(req.url.split("/").pop());
 
   const r = await env.BMT_DB
-    .prepare(
-      `
-    SELECT *
-    FROM riwayat
-    WHERE transaksi_id = ?
-    ORDER BY created_at ASC
-  `
-    )
+    .prepare(`
+      SELECT * FROM riwayat
+      WHERE transaksi_id = ?
+      ORDER BY created_at ASC
+    `)
     .bind(tid)
     .all();
 
@@ -691,9 +590,9 @@ async function riwayatDetail(env, req) {
 
   return json({
     transaksi_id: tid,
-    masuk: rows.filter((x) => x.tipe === "masuk"),
-    keluar: rows.filter((x) => x.tipe === "keluar"),
-    audit: rows.filter((x) => x.tipe === "audit"),
+    masuk: rows.filter(x => x.tipe === "masuk"),
+    keluar: rows.filter(x => x.tipe === "keluar"),
+    audit: rows.filter(x => x.tipe === "audit"),
     edits: [],
   });
 }
@@ -706,37 +605,29 @@ async function riwayatBarang(env, req) {
   const id = Number(req.url.split("/").pop());
 
   const masuk = await env.BMT_DB
-    .prepare(
-      `SELECT * FROM stok_masuk WHERE barang_id=? ORDER BY created_at DESC`
-    )
+    .prepare(`SELECT * FROM stok_masuk WHERE barang_id=? ORDER BY created_at DESC`)
     .bind(id)
     .all();
 
   const keluar = await env.BMT_DB
-    .prepare(
-      `SELECT * FROM stok_keluar WHERE barang_id=? ORDER BY created_at DESC`
-    )
+    .prepare(`SELECT * FROM stok_keluar WHERE barang_id=? ORDER BY created_at DESC`)
     .bind(id)
     .all();
 
   let audit;
   try {
     audit = await env.BMT_DB
-      .prepare(
-        `SELECT * FROM stok_audit WHERE barang_id=? ORDER BY created_at DESC`
-      )
+      .prepare(`SELECT * FROM stok_audit WHERE barang_id=? ORDER BY created_at DESC`)
       .bind(id)
       .all();
     audit = audit.results || [];
   } catch (e) {
     const fallback = await env.BMT_DB
-      .prepare(
-        `SELECT * FROM riwayat WHERE barang_id=? ORDER BY created_at DESC`
-      )
+      .prepare(`SELECT * FROM riwayat WHERE barang_id=? ORDER BY created_at DESC`)
       .bind(id)
       .all()
       .catch(() => ({ results: [] }));
-    audit = (fallback.results || []).filter((x) => x.tipe === "audit");
+    audit = (fallback.results || []).filter(x => x.tipe === "audit");
   }
 
   return json({
@@ -755,6 +646,7 @@ async function messageGet(env) {
   const rows = await env.BMT_DB
     .prepare(`SELECT * FROM messages ORDER BY created_at DESC LIMIT 100`)
     .all();
+
   return json({ items: rows.results || [] });
 }
 
@@ -762,10 +654,9 @@ async function messageAdd(env, req) {
   const b = await bodyJSON(req);
   if (!b || !b.text) return json({ error: "text required" }, 400);
 
-  const now = nowISO();
   await env.BMT_DB
     .prepare(`INSERT INTO messages(text,created_at) VALUES(?,?)`)
-    .bind(b.text, now)
+    .bind(b.text, nowISO())
     .run();
 
   return json({ ok: true });
@@ -773,10 +664,12 @@ async function messageAdd(env, req) {
 
 async function messageDelete(env, req) {
   const id = Number(req.url.split("/").pop());
+
   await env.BMT_DB
     .prepare(`DELETE FROM messages WHERE id=?`)
     .bind(id)
     .run();
+
   return json({ ok: true });
 }
 
@@ -785,9 +678,13 @@ async function messageDelete(env, req) {
 //////////////////////////////
 
 async function settingsList(env) {
-  const rows = await env.BMT_DB.prepare(`SELECT * FROM settings`).all();
+  const rows = await env.BMT_DB
+    .prepare(`SELECT * FROM settings`)
+    .all();
+
   const map = {};
-  (rows.results || []).forEach((r) => (map[r.key] = r.value));
+  (rows.results || []).forEach(r => map[r.key] = r.value);
+
   return json({ settings: map });
 }
 
@@ -805,10 +702,12 @@ async function settingsSet(env, req) {
 
 async function settingsDelete(env, req) {
   const key = req.url.split("/").pop();
+
   await env.BMT_DB
     .prepare(`DELETE FROM settings WHERE key=?`)
     .bind(key)
     .run();
+
   return json({ ok: true });
 }
 
@@ -818,8 +717,9 @@ async function settingsDelete(env, req) {
 
 async function usersList(env) {
   const rows = await env.BMT_DB
-    .prepare(`SELECT id,username,role FROM users ORDER BY username ASC`)
+    .prepare(`SELECT id, username, role FROM users ORDER BY username ASC`)
     .all();
+
   return json({ users: rows.results || [] });
 }
 
@@ -829,9 +729,10 @@ async function usersAdd(env, req) {
     return json({ error: "username required" }, 400);
 
   await env.BMT_DB
-    .prepare(
-      `INSERT INTO users(username,password,role,created_at) VALUES(?,?,?,?)`
-    )
+    .prepare(`
+      INSERT INTO users(username,password,role,created_at)
+      VALUES(?,?,?,?)
+    `)
     .bind(b.username, b.password || "", b.role || "user", nowISO())
     .run();
 
@@ -845,7 +746,7 @@ async function usersUpdate(env, req) {
   const sets = [];
   const vals = [];
 
-  ["username", "role"].forEach((k) => {
+  ["username", "role"].forEach(k => {
     if (b[k] !== undefined) {
       sets.push(`${k}=?`);
       vals.push(b[k]);
@@ -865,10 +766,12 @@ async function usersUpdate(env, req) {
 
 async function usersDelete(env, req) {
   const id = Number(req.url.split("/").pop());
+
   await env.BMT_DB
     .prepare(`DELETE FROM users WHERE id=?`)
     .bind(id)
     .run();
+
   return json({ ok: true });
 }
 
@@ -881,23 +784,19 @@ async function pengeluaranAdd(env, req) {
   if (!b || !b.nama || !b.jumlah)
     return json({ error: "nama & jumlah required" }, 400);
 
-  const now = nowISO();
-
   await env.BMT_DB
-    .prepare(
-      `
-    INSERT INTO pengeluaran (
-      nama, kategori, jumlah, catatan, dibuat_oleh, created_at
-    ) VALUES (?,?,?,?,?,?)
-  `
-    )
+    .prepare(`
+      INSERT INTO pengeluaran (
+        nama, kategori, jumlah, catatan, dibuat_oleh, created_at
+      ) VALUES (?,?,?,?,?,?)
+    `)
     .bind(
       b.nama,
       b.kategori || "",
       Number(b.jumlah || 0),
       b.catatan || "",
       b.dibuat_oleh || "Admin",
-      now
+      nowISO()
     )
     .run();
 
@@ -914,15 +813,15 @@ async function pengeluaranList(env) {
 
 async function pengeluaranDelete(env, req) {
   const id = Number(req.url.split("/").pop());
+
   await env.BMT_DB
     .prepare(`DELETE FROM pengeluaran WHERE id=?`)
     .bind(id)
     .run();
+
   return json({ ok: true });
 }
 
 //////////////////////////////
 // END OF FILE
 //////////////////////////////
-
-<<< PART 3/3 END >>>  
