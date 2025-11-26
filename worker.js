@@ -76,6 +76,15 @@ export default {
         return servisBatal(env, request);
 
       // ==========================
+      // PATCH BARU — UPDATE CATATAN & BIAYA
+      // ==========================
+      if (path.startsWith("/api/servis/update_catatan/") && method === "PUT")
+        return servisUpdateCatatan(env, request);
+
+      if (path.startsWith("/api/servis/update_cost/") && method === "PUT")
+        return servisUpdateBiaya(env, request);
+
+      // ==========================
       // RIWAYAT
       // ==========================
       if (path === "/api/riwayat" && method === "GET")
@@ -153,10 +162,11 @@ export default {
     }
   }
 };
+<<< PART 2/3 START >>>
 
-/* ==========================
-   Utilities
-   ========================== */
+//////////////////////////////
+// Utilities
+//////////////////////////////
 
 function corsHeaders() {
   return {
@@ -196,9 +206,10 @@ function makeTID() {
   const rnd = Math.random().toString(16).slice(2, 7).toUpperCase();
   return `${ts}-${rnd}`;
 }
-/* ==========================
-   BARANG CRUD
-   ========================== */
+
+//////////////////////////////
+// BARANG CRUD
+//////////////////////////////
 
 async function listBarang(env) {
   const rows = await env.BMT_DB
@@ -254,9 +265,9 @@ async function deleteBarang(env, req) {
   return json({ ok: true });
 }
 
-/* ==========================
-   SEARCH / KATEGORI
-   ========================== */
+//////////////////////////////
+// SEARCH / KATEGORI
+//////////////////////////////
 
 async function searchBarang(env, url) {
   const q = url.searchParams.get("q") || "";
@@ -278,9 +289,9 @@ async function listKategori(env) {
   });
 }
 
-/* ==========================
-   STOK MASUK
-   ========================== */
+//////////////////////////////
+// STOK MASUK
+//////////////////////////////
 
 async function stokMasuk(env, req) {
   const b = await bodyJSON(req);
@@ -340,10 +351,9 @@ async function stokMasuk(env, req) {
   return json({ ok: true, transaksi_id: tid });
 }
 
-/* ==========================
-   STOK KELUAR (PATCHED)
-   menerima transaksi_id dari SERVIS
-   ========================== */
+//////////////////////////////
+// STOK KELUAR
+//////////////////////////////
 
 async function stokKeluar(env, req) {
   const b = await bodyJSON(req);
@@ -354,7 +364,6 @@ async function stokKeluar(env, req) {
   const operator = b.dibuat_oleh || b.operator || "Admin";
   const now = nowISO();
 
-  // PATCH:
   const tid = b.transaksi_id || "PJL-" + makeTID();
 
   for (const it of items) {
@@ -397,9 +406,9 @@ async function stokKeluar(env, req) {
   return json({ ok: true, transaksi_id: tid });
 }
 
-/* ==========================
-   STOK AUDIT
-   ========================== */
+//////////////////////////////
+// STOK AUDIT
+//////////////////////////////
 
 async function stokAudit(env, req) {
   const b = await bodyJSON(req);
@@ -444,9 +453,9 @@ async function stokAudit(env, req) {
   return json({ ok: true, transaksi_id: tid });
 }
 
-/* ==========================
-   SERVIS (BARU)
-   ========================== */
+//////////////////////////////
+// SERVIS
+//////////////////////////////
 
 async function servisList(env) {
   const rows = await env.BMT_DB
@@ -600,9 +609,43 @@ async function servisBatal(env, req) {
 
   return json({ ok: true });
 }
-/* ==========================
-   RIWAYAT
-   ========================== */
+
+//////////////////////////////
+// PATCH BARU – UPDATE CATATAN
+//////////////////////////////
+
+async function servisUpdateCatatan(env, req) {
+  const id_servis = Number(req.url.split("/").pop());
+  const b = await bodyJSON(req);
+
+  await env.BMT_DB
+    .prepare(`UPDATE servis SET catatan=? WHERE id_servis=?`)
+    .bind(b.catatan || "", id_servis)
+    .run();
+
+  return json({ ok: true });
+}
+
+//////////////////////////////
+// PATCH BARU – UPDATE BIAYA SERVIS
+//////////////////////////////
+
+async function servisUpdateBiaya(env, req) {
+  const id_servis = Number(req.url.split("/").pop());
+  const b = await bodyJSON(req);
+
+  await env.BMT_DB
+    .prepare(`UPDATE servis SET biaya_servis=? WHERE id_servis=?`)
+    .bind(Number(b.biaya_servis || 0), id_servis)
+    .run();
+
+  return json({ ok: true });
+}
+<<< PART 3/3 START >>>
+
+//////////////////////////////
+// RIWAYAT
+//////////////////////////////
 
 async function riwayatAll(env, url) {
   const limit = Number(url.searchParams.get("limit") || 50);
@@ -650,9 +693,9 @@ async function riwayatDetail(env, req) {
   });
 }
 
-/* ==========================
-   PER-BARANG HISTORY
-   ========================== */
+//////////////////////////////
+// PER-BARANG HISTORY
+//////////////////////////////
 
 async function riwayatBarang(env, req) {
   const id = Number(req.url.split("/").pop());
@@ -699,9 +742,9 @@ async function riwayatBarang(env, req) {
   });
 }
 
-/* ==========================
-   MESSAGES
-   ========================== */
+//////////////////////////////
+// MESSAGES
+//////////////////////////////
 
 async function messageGet(env) {
   const rows = await env.BMT_DB
@@ -732,9 +775,9 @@ async function messageDelete(env, req) {
   return json({ ok: true });
 }
 
-/* ==========================
-   SETTINGS
-   ========================== */
+//////////////////////////////
+// SETTINGS
+//////////////////////////////
 
 async function settingsList(env) {
   const rows = await env.BMT_DB.prepare(`SELECT * FROM settings`).all();
@@ -764,9 +807,9 @@ async function settingsDelete(env, req) {
   return json({ ok: true });
 }
 
-/* ==========================
-   USERS
-   ========================== */
+//////////////////////////////
+// USERS
+//////////////////////////////
 
 async function usersList(env) {
   const rows = await env.BMT_DB
@@ -824,9 +867,9 @@ async function usersDelete(env, req) {
   return json({ ok: true });
 }
 
-/* ==========================
-   PENGELUARAN
-   ========================== */
+//////////////////////////////
+// PENGELUARAN
+//////////////////////////////
 
 async function pengeluaranAdd(env, req) {
   const b = await bodyJSON(req);
@@ -873,6 +916,8 @@ async function pengeluaranDelete(env, req) {
   return json({ ok: true });
 }
 
-/* ==========================
-   END OF FILE
-   ========================== */
+//////////////////////////////
+// END OF FILE
+//////////////////////////////
+
+<<< PART 3/3 END >>>  
