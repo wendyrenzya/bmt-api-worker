@@ -89,6 +89,15 @@ export default {
       if (path.startsWith("/api/servis/") && method === "GET")
         return servisDetail(env, request);
 
+      // =============================================
+// RIWAYAT SERVIS (BARU)
+// =============================================
+if (path === "/api/riwayat_servis" && method === "POST")
+  return riwayatServisAdd(env, request);
+
+if (path.startsWith("/api/riwayat_servis/") && method === "GET")
+  return riwayatServisGet(env, request);
+      
       // ==========================
       // RIWAYAT
       // ==========================
@@ -1359,6 +1368,49 @@ async function laporanDetail(env, url) {
     return json({error:String(e)},500);
   }
         }
+// =============================================
+// HANDLER: Tambah riwayat servis utuh
+// =============================================
+async function riwayatServisAdd(env, req){
+  const b = await bodyJSON(req);
+
+  if(!b || !b.transaksi_id || !b.id_servis)
+    return json({ error: "transaksi_id & id_servis required" }, 400);
+
+  const now = nowISO();
+
+  await env.BMT_DB.prepare(`
+      INSERT OR REPLACE INTO riwayat_servis(
+        transaksi_id, id_servis, nama_servis, teknisi,
+        biaya_servis, keterangan, created_at
+      ) VALUES (?,?,?,?,?,?,?)
+  `).bind(
+      b.transaksi_id,
+      b.id_servis,
+      b.nama_servis || "",
+      b.teknisi || "",
+      Number(b.biaya_servis || 0),
+      b.keterangan || "",
+      now
+  ).run();
+
+  return json({ ok:true });
+}
+
+
+// =============================================
+// HANDLER: Ambil data riwayat servis lengkap
+// =============================================
+async function riwayatServisGet(env, req){
+  const tid = decodeURIComponent(req.url.split("/").pop());
+
+  const row = await env.BMT_DB
+    .prepare(`SELECT * FROM riwayat_servis WHERE transaksi_id=? LIMIT 1`)
+    .bind(tid)
+    .first();
+
+  return json({ item: row || null });
+}
 //////////////////////////////
 // END OF FILE
 //////////////////////////////
