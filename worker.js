@@ -156,6 +156,24 @@ export default {
         return pengeluaranDelete(env, request);
 
       // ==========================
+      // LAPORAN — ROUTES
+      // ==========================
+if (path === "/api/laporan/bulanan" && method === "GET")
+  return laporanBulanan(env, url);
+
+if (path === "/api/laporan/harian" && method === "GET")
+  return laporanHarianRange(env, url);
+
+if (path === "/api/laporan/harian/summary" && method === "GET")
+  return laporanHarianSummary(env);
+
+if (path === "/api/laporan/harian" && method === "POST")
+  return laporanHarianSave(env, request);
+
+if (path === "/api/laporan/detail" && method === "GET")
+  return laporanDetail(env, url);
+      
+      // ==========================
       // HEALTH
       // ==========================
       if (path === "/api/health" || path === "/health")
@@ -944,7 +962,228 @@ async function pengeluaranDelete(env, req) {
 
   return json({ ok: true });
 }
+///////////////////////////////////////////////////////////////
+// LAPORAN — HANDLERS
+///////////////////////////////////////////////////////////////
 
+async function laporanBulanan(env, url) {
+  const month = url.searchParams.get("bulan") || new Date().toISOString().slice(0,7);
+  const start = `${month}-01T00:00:00Z`;
+  const [y, m] = month.split("-").map(Number);
+  const end = new Date(Date.UTC(y, m, 1)).toISOString();
+
+  try {
+    let pen = await env.BMT_DB.prepare(`
+      SELECT IFNULL(SUM(harga * jumlah),0) AS total FROM stok_keluar
+      WHERE transaksi_id LIKE 'PJL-%' AND created_at >= ? AND created_at < ?
+    `).bind(start, end).first();
+
+    let chg = await env.BMT_DB.prepare(`
+      SELECT IFNULL(SUM(biaya_servis),0) AS total FROM servis
+      WHERE catatan LIKE '%#CHG_FOR=%' AND created_at >= ? AND created_at < ?
+    `).bind(start, end).first();
+
+    let out = await env.BMT_DB.prepare(`
+      SELECT IFNULL(SUM(jumlah),0) AS total FROM pengeluaran
+      WHERE created_at >= ? AND created_at < ?
+    `).bind(start, end).first();
+
+    return json({
+      total_penjualan: Number(pen.total || 0),
+      total_charge: Number(chg.total || 0),
+      total_pengeluaran: Number(out.total || 0)
+    });
+  } catch (e) {
+    return json({ error: String(e) }, 500);
+  }
+}
+
+async function laporanHarianRange(env, url) {
+  const start = url.searchParams.get("start");
+  const end = url.searchParams.get("end");
+  if (!start || !end) return json({ error: "start & end required" }, 400);
+
+  const startISO = `${start}T00:00:00Z`;
+  const endISO = new Date(new Date(end).getTime() + 86400000).toISOString();
+
+  try {
+    let penRows = await env.BMT_DB.prepare(`
+      SELECT substr(created_at,1,10) AS tanggal, IFNULL(SUM(harga * jumlah),0) AS penjualan
+      FROM stok_keluar
+      WHERE transaksi_id LIKE 'PJL-%' AND created_at >= ? AND created_at < ?
+      GROUP BY substr(created_at,1,10)
+    `).bind(startISO, endISO).all();
+
+    let outRows = await env.BMT_DB.prepare(`
+      SELECT substr(created_at,1,10) AS tanggal, IFNULL(SUM(jumlah),0) AS pengeluaran
+      FROM pengeluaran
+      WHERE created_at >= ? AND created_at < ?
+      GROUP BY substr(created_at,1,10)
+    `).bind(startISO, endISO).all();
+
+    const pens = Object.fromEntries((penRows.results||[]).map(x=>[x.tanggal,Number(x.penjualan)]));
+    const outs = Object.fromEntries((outRows.results||[]).map(x=>[x.tanggal,Number(x.pengeluaran)]));
+
+    const days = [];
+    let d = new Date(start);
+    const last = new Date(end);
+
+    while (d <= last) {
+      const iso = d.toISOString().slice(0,10);
+      days.push({
+        tanggal: iso,
+        penjualan: pens[iso] || 0,
+        pengeluaran: outs[iso] || 0
+      });
+      d.setDate(d.getDate() + 1);
+    }
+
+    return json(days);
+  } catch (e) {
+    return json({ error: String(e) }, 500);
+  }
+}
+
+async function laporanHarianSummary(env) {
+  try {
+    await env.BMT_DB.prepare(`
+      CREATE TABLE IF NOT EXISTS laporan_harian (
+        tanggal TEXT PRIMARY KEY,
+        penjualan_cash INTEGER DEFAULT 0,
+        penjualan_transfer INTEGER DEFAULT 0,
+        pengeluaran INTEGER DEFAULT 0,
+        charge INTEGER DEFAULT 0,
+        created_at TEXT
+      )
+    `).run();
+
+    const today = new Date().toISOString().slice(0,10);
+    let row = await env.BMT_DB.prepare(`
+      SELECT * FROM laporan_harian WHERE tanggal=? LIMIT 1
+    `).bind(today).first();
+
+    if (!row) {
+      row = await env.BMT_DB.prepare(`
+        SELECT * FROM laporan_harian ORDER BY tanggal DESC LIMIT 1
+      `).first() || {};
+    }
+
+    return json({
+      tanggal: row?.tanggal || null,
+      penjualan_cash: Number(row?.penjualan_cash || 0),
+      penjualan_transfer: Number(row?.penjualan_transfer || 0),
+      pengeluaran: Number(row?.pengeluaran || 0),
+      charge: Number(row?.charge || 0)
+    });
+  } catch (e) {
+    return json({ error: String(e) }, 500);
+  }
+}
+
+async function laporanHarianSave(env, request) {
+  const b = await bodyJSON(request);
+  if (!b?.tanggal) return json({ error:"tanggal required" },400);
+
+  const t = String(b.tanggal).slice(0,10);
+  const now = new Date().toISOString();
+
+  try {
+    await env.BMT_DB.prepare(`
+      CREATE TABLE IF NOT EXISTS laporan_harian (
+        tanggal TEXT PRIMARY KEY,
+        penjualan_cash INTEGER DEFAULT 0,
+        penjualan_transfer INTEGER DEFAULT 0,
+        pengeluaran INTEGER DEFAULT 0,
+        charge INTEGER DEFAULT 0,
+        created_at TEXT
+      )
+    `).run();
+
+    await env.BMT_DB.prepare(`
+      INSERT INTO laporan_harian VALUES(?,?,?,?,?,?)
+      ON CONFLICT(tanggal) DO UPDATE SET
+        penjualan_cash=excluded.penjualan_cash,
+        penjualan_transfer=excluded.penjualan_transfer,
+        pengeluaran=excluded.pengeluaran,
+        charge=excluded.charge,
+        created_at=excluded.created_at
+    `).bind(
+      t,
+      Number(b.penjualan_cash || 0),
+      Number(b.penjualan_transfer || 0),
+      Number(b.pengeluaran || 0),
+      Number(b.charge || 0),
+      now
+    ).run();
+
+    return json({ ok:true, tanggal:t });
+  } catch (e) {
+    return json({ error:String(e) },500);
+  }
+}
+
+async function laporanDetail(env, url) {
+  const dari = url.searchParams.get("dari");
+  const sampai = url.searchParams.get("sampai");
+  if (!dari || !sampai) return json({error:"dari & sampai required"},400);
+
+  const startISO = `${dari}T00:00:00Z`;
+  const endISO = new Date(new Date(sampai).getTime()+86400000).toISOString();
+
+  try {
+    const r = await env.BMT_DB.prepare(`
+      SELECT * FROM riwayat
+      WHERE created_at >= ? AND created_at < ?
+      ORDER BY created_at ASC
+    `).bind(startISO,endISO).all();
+
+    const map = {};
+
+    for (const x of (r.results||[])) {
+      const tid = x.transaksi_id;
+      if (!map[tid]) map[tid] = {
+        tanggal: x.created_at.slice(0,10),
+        transaksi_id: tid,
+        tipe: x.tipe,
+        jumlah: 0
+      };
+      const sub = (Number(x.harga||0) * Number(x.jumlah||0)) || Number(x.jumlah||0);
+      map[tid].jumlah += sub;
+    }
+
+    const pg = await env.BMT_DB.prepare(`
+      SELECT * FROM pengeluaran
+      WHERE created_at >= ? AND created_at < ?
+    `).bind(startISO,endISO).all();
+
+    for (const p of (pg.results||[])) {
+      map[`OUT-${p.id}`] = {
+        tanggal: p.created_at.slice(0,10),
+        transaksi_id: `OUT-${p.id}`,
+        tipe: "pengeluaran",
+        jumlah: Number(p.jumlah||0)
+      };
+    }
+
+    const ch = await env.BMT_DB.prepare(`
+      SELECT * FROM servis
+      WHERE catatan LIKE '%#CHG_FOR=%' AND created_at >= ? AND created_at < ?
+    `).bind(startISO,endISO).all();
+
+    for (const c of (ch.results||[])) {
+      map[c.transaksi_id] = {
+        tanggal: c.created_at.slice(0,10),
+        transaksi_id: c.transaksi_id,
+        tipe: "charge",
+        jumlah: Number(c.biaya_servis||0)
+      };
+    }
+
+    return json({ items: Object.values(map).sort((a,b)=> b.tanggal.localeCompare(a.tanggal)) });
+  } catch(e) {
+    return json({error:String(e)},500);
+  }
+        }
 //////////////////////////////
 // END OF FILE
 //////////////////////////////
