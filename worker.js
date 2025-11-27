@@ -508,7 +508,7 @@ await env.BMT_DB
     `INSERT INTO riwayat(
       transaksi_id, tipe, barang_id,
       jumlah, harga,
-      dibuat_oleh, keterangan, created_at,
+      dibuat_oleh, catatan, created_at,
       stok_lama, stok_baru
     ) VALUES (?,?,?,?,?,?,?,?,?,?)`
   )
