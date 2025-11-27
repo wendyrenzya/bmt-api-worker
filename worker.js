@@ -843,23 +843,26 @@ async function riwayatDetail(env, req) {
     `)
     .bind(tid)
     .all();
-
+// PATCH: tarik detail servis jika exist
+  const srv = await env.BMT_DB
+    .prepare(`SELECT * FROM riwayat_servis WHERE transaksi_id=? LIMIT 1`)
+    .bind(tid)
+    .first();
   const rows = r.results || [];
 
   return json({
-    transaksi_id: tid,
-    masuk: rows.filter(x => x.tipe === "masuk"),
-    keluar: rows.filter(x => x.tipe === "keluar"),
-    audit: rows
-  .filter(x => x.tipe === "audit")
-  .map(x => ({
-    ...x,
-    stok_lama: x.stok_lama ?? null,
-    stok_baru: x.stok_baru ?? null
-  })),
-    edits: [],
-  });
-}
+  transaksi_id: tid,
+  servis: srv || null,         // PATCH BARU
+  masuk: rows.filter(x => x.tipe === "masuk"),
+  keluar: rows.filter(x => x.tipe === "keluar"),
+  audit: rows.filter(x => x.tipe === "audit")
+    .map(x => ({
+        ...x,
+        stok_lama: x.stok_lama ?? null,
+        stok_baru: x.stok_baru ?? null
+    })),
+  edits: []
+});
 
 //////////////////////////////
 // PER-BARANG HISTORY
