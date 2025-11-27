@@ -577,72 +577,88 @@ await env.BMT_DB.prepare(
 // STOK AUDIT
 //////////////////////////////
 
+//////////////////////////////
+// STOK AUDIT (FORMAT BARU ONLY)
+//////////////////////////////
+
 async function stokAudit(env, req) {
   const b = await bodyJSON(req);
-  if (!b || !b.barang_id)
-    return json({ error: "barang_id required" }, 400);
+  if (!b || !Array.isArray(b.items) || !b.items.length) {
+    return json({ error: "items[] required" }, 400);
+  }
 
-  const operator = b.dibuat_oleh || b.operator || "Admin";
+  const operator = b.dibuat_oleh || "Admin";
   const now = nowISO();
   const tid = "AUD-" + makeTID();
 
-  const oldRow = await env.BMT_DB
-    .prepare(`SELECT stock FROM barang WHERE id=?`)
-    .bind(b.barang_id)
-    .first();
+  for (const it of b.items) {
+    const barang_id = Number(it.barang_id);
+    const stok_baru = Number(it.stok_baru);
+    const ket = it.keterangan || "";
 
-  const oldStock = Number(oldRow?.stock || 0);
-  const newStock = Number(b.stok_baru || b.stock || 0);
+    if (!barang_id || isNaN(stok_baru)) continue;
 
-  console.log("AUDIT_DEBUG", tid, oldStock, newStock);
- 
-  await env.BMT_DB
-    .prepare(`UPDATE barang SET stock=? WHERE id=?`)
-    .bind(newStock, b.barang_id)
-    .run();
+    const getOld = await env.BMT_DB
+      .prepare("SELECT stock, nama FROM barang WHERE id=?")
+      .bind(barang_id)
+      .first();
 
-  await env.BMT_DB
-    .prepare(
-      `INSERT INTO stok_audit(
-      barang_id,stok_lama,stok_baru,keterangan,dibuat_oleh,created_at,transaksi_id
-    ) VALUES (?,?,?,?,?,?,?)`
-    )
-    .bind(
-      b.barang_id,
-      oldStock,
-      newStock,
-      b.keterangan || "",
-      operator,
-      now,
-      tid
-    )
-    .run();
+    const stok_lama = Number(getOld?.stock || 0);
+    const namaBarang = getOld?.nama || "";
 
-// PATCH RIWAYAT — AUDIT (FINAL KOMPATIBEL)
-await env.BMT_DB
-  .prepare(
-    `INSERT INTO riwayat(
-      transaksi_id, tipe, barang_id,
-      jumlah, harga,
-      dibuat_oleh, catatan, created_at,
-      stok_lama, stok_baru
-    ) VALUES (?,?,?,?,?,?,?,?,?,?)`
-  )
-  .bind(
-    tid,
-    "audit",
-    b.barang_id,
-    newStock - oldStock,  // selisih, tetap disimpan
-    0,
-    operator,
-    b.keterangan || "",
-    now,
-    oldStock,
-    newStock
-  )
-  .run();
-  return json({ ok: true });
-    }
+    // UPDATE STOK
+    await env.BMT_DB
+      .prepare("UPDATE barang SET stock=? WHERE id=?")
+      .bind(stok_baru, barang_id)
+      .run();
+
+    // INSERT stok_audit
+    await env.BMT_DB
+      .prepare(`
+        INSERT INTO stok_audit(
+          barang_id, stok_lama, stok_baru,
+          keterangan, dibuat_oleh, created_at, transaksi_id
+        )
+        VALUES (?,?,?,?,?,?,?)
+      `)
+      .bind(
+        barang_id,
+        stok_lama,
+        stok_baru,
+        ket,
+        operator,
+        now,
+        tid
+      ).run();
+
+    // INSERT ke RIWAYAT
+    await env.BMT_DB
+      .prepare(`
+        INSERT INTO riwayat(
+          transaksi_id, tipe, barang_id,
+          jumlah, harga,
+          dibuat_oleh, catatan, created_at,
+          stok_lama, stok_baru, barang_nama
+        )
+        VALUES (?,?,?,?,?,?,?,?,?,?,?)
+      `)
+      .bind(
+        tid,
+        "audit",
+        barang_id,
+        stok_baru - stok_lama,
+        0,
+        operator,
+        ket,
+        now,
+        stok_lama,
+        stok_baru,
+        namaBarang
+      ).run();
+  }
+
+  return json({ ok: true, transaksi_id: tid });
+}
 ////////////////////////////////////////////////////
 // SERVIS HANDLERS (FIXED VERSION)
 ////////////////////////////////////////////////////
