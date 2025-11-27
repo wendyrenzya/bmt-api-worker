@@ -127,7 +127,13 @@ export default {
 
       if (path.startsWith("/api/settings/") && method === "DELETE")
         return settingsDelete(env, request);
-
+     
+      // ==========================
+      // LOGIN
+      // ==========================
+      if (path === "/api/login" && method === "POST")
+        return loginUser(env, request); 
+    
       // ==========================
       // USERS
       // ==========================
@@ -850,6 +856,35 @@ async function settingsDelete(env, req) {
     .run();
 
   return json({ ok: true });
+}
+////// LOGIN
+
+async function loginUser(env, req) {
+  const b = await bodyJSON(req);
+  if (!b || !b.username || !b.password)
+    return json({ error: "username & password required" }, 400);
+
+  const row = await env.BMT_DB
+    .prepare(`SELECT * FROM users WHERE username=? LIMIT 1`)
+    .bind(b.username)
+    .first();
+
+  if (!row)
+    return json({ error: "User tidak ditemukan" }, 400);
+
+  // password_hash digunakan sebagai password plain
+  if (String(row.password_hash) !== String(b.password))
+    return json({ error: "Password salah" }, 400);
+
+  const token = crypto.randomUUID();
+
+  return json({
+    ok: true,
+    token,
+    username: row.username,
+    nama: row.nama,
+    role: row.role
+  });
 }
 
 //////////////////////////////
