@@ -134,20 +134,45 @@ export default {
       if (path === "/api/login" && method === "POST")
         return loginUser(env, request); 
     
+      // // ==========================
+      // USERS (PATCH FINAL)
       // ==========================
-      // USERS
-      // ==========================
+
+
+      // List user lengkap
+
       if (path === "/api/users" && method === "GET")
         return usersList(env);
 
-      if (path === "/api/users" && method === "POST")
-        return usersAdd(env, request);
 
-      if (path.startsWith("/api/users/") && method === "PUT")
-        return usersUpdate(env, request);
+      // Detail user
+      if (path.startsWith("/api/user/") && method === "GET")
+  return userDetail(env, request);
 
-      if (path.startsWith("/api/users/") && method === "DELETE")
-        return usersDelete(env, request);
+
+      // Update nama
+      if (path.startsWith("/api/user/name/") && method === "PUT")
+  return userUpdateNama(env, request);
+
+
+      // Update password
+
+      if (path.startsWith("/api/user/password/") && method === "PUT")
+  return userUpdatePassword(env, request);
+
+
+      // Update foto
+
+      if (path.startsWith("/api/user/foto/") && method === "PUT")
+  return userUpdateFoto(env, request);
+
+// Create user (lama, tetap)
+if (path === "/api/users" && method === "POST")
+  return usersAdd(env, request);
+
+// Delete user (lama, tetap)
+if (path.startsWith("/api/users/") && method === "DELETE")
+  return usersDelete(env, request);
 
       // ==========================
       // PENGELUARAN
@@ -958,14 +983,70 @@ async function loginUser(env, req) {
 // USERS
 //////////////////////////////
 
+//////////////////////////////
+// USERS (PATCH FINAL)
+//////////////////////////////
+
+// List semua user lengkap
 async function usersList(env) {
   const rows = await env.BMT_DB
-    .prepare(`SELECT id, username, role FROM users ORDER BY username ASC`)
+    .prepare(`SELECT id, username, nama, role, foto FROM users ORDER BY username ASC`)
     .all();
 
   return json({ users: rows.results || [] });
 }
 
+// Detail user
+async function userDetail(env, req) {
+  const id = Number(req.url.split("/").pop());
+  const row = await env.BMT_DB
+    .prepare(`SELECT id, username, nama, role, foto FROM users WHERE id=?`)
+    .bind(id)
+    .first();
+
+  return json({ user: row || null });
+}
+
+// Update nama
+async function userUpdateNama(env, req) {
+  const id = Number(req.url.split("/").pop());
+  const b = await bodyJSON(req);
+
+  await env.BMT_DB
+    .prepare(`UPDATE users SET nama=? WHERE id=?`)
+    .bind(b.nama || "", id)
+    .run();
+
+  return json({ ok: true });
+}
+
+// Update password
+async function userUpdatePassword(env, req) {
+  const id = Number(req.url.split("/").pop());
+  const b = await bodyJSON(req);
+
+  await env.BMT_DB
+    .prepare(`UPDATE users SET password_hash=? WHERE id=?`)
+    .bind(b.password || "", id)
+    .run();
+
+  return json({ ok: true });
+}
+
+// Update foto
+async function userUpdateFoto(env, req) {
+  const id = Number(req.url.split("/").pop());
+  const b = await bodyJSON(req);
+
+  await env.BMT_DB
+    .prepare(`UPDATE users SET foto=? WHERE id=?`)
+    .bind(b.foto || "", id)
+    .run();
+
+  return json({ ok: true });
+}
+
+// Create user (tetap)
 async function usersAdd(env, req) {
   const b = await bodyJSON(req);
   if (!b || !b.username)
@@ -973,7 +1054,7 @@ async function usersAdd(env, req) {
 
   await env.BMT_DB
     .prepare(`
-      INSERT INTO users(username,password,role,created_at)
+      INSERT INTO users(username,password_hash,role,created_at)
       VALUES(?,?,?,?)
     `)
     .bind(b.username, b.password || "", b.role || "user", nowISO())
@@ -982,31 +1063,7 @@ async function usersAdd(env, req) {
   return json({ ok: true });
 }
 
-async function usersUpdate(env, req) {
-  const id = Number(req.url.split("/").pop());
-  const b = await bodyJSON(req);
-
-  const sets = [];
-  const vals = [];
-
-  ["username", "role"].forEach(k => {
-    if (b[k] !== undefined) {
-      sets.push(`${k}=?`);
-      vals.push(b[k]);
-    }
-  });
-
-  if (sets.length) {
-    vals.push(id);
-    await env.BMT_DB
-      .prepare(`UPDATE users SET ${sets.join(",")} WHERE id=?`)
-      .bind(...vals)
-      .run();
-  }
-
-  return json({ ok: true });
-}
-
+// Delete user (tetap)
 async function usersDelete(env, req) {
   const id = Number(req.url.split("/").pop());
 
