@@ -863,7 +863,7 @@ async function riwayatDetail(env, req) {
     })),
   edits: []
 });
-
+}
 //////////////////////////////
 // PER-BARANG HISTORY
 //////////////////////////////
