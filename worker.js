@@ -850,17 +850,37 @@ async function riwayatDetail(env, req) {
     .first();
   const rows = r.results || [];
 
+  // === PATCH CHARGE ===
+// Ambil CHARGE dari keterangan
+const chargeItems = rows.filter(
+  x => x.keterangan && x.keterangan.includes("#CHG_FOR=" + tid)
+);
+
+// Buang CHARGE dari rows lain
+const filteredRows = rows.filter(
+  x => !(x.keterangan && x.keterangan.includes("#CHG_FOR=" + tid))
+);
+  
   return json({
   transaksi_id: tid,
-  servis: srv || null,         // PATCH BARU
-  masuk: rows.filter(x => x.tipe === "masuk"),
-  keluar: rows.filter(x => x.tipe === "keluar"),
-  audit: rows.filter(x => x.tipe === "audit")
+  servis: srv || null,
+
+  // === CHARGE Field Baru ===
+  charge: chargeItems,
+
+  // === rows tanpa charge ===
+  masuk: filteredRows.filter(x => x.tipe === "masuk"),
+
+  keluar: filteredRows.filter(x => x.tipe === "keluar"),
+
+  audit: filteredRows
+    .filter(x => x.tipe === "audit")
     .map(x => ({
-        ...x,
-        stok_lama: x.stok_lama ?? null,
-        stok_baru: x.stok_baru ?? null
+      ...x,
+      stok_lama: x.stok_lama ?? null,
+      stok_baru: x.stok_baru ?? null
     })),
+
   edits: []
 });
 }
