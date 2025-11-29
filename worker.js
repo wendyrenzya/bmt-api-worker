@@ -8,6 +8,16 @@ export default {
       return new Response(null, { status: 204, headers: corsHeaders() });
 
     try {
+    
+    // ==========================
+// ABSENSI
+// ==========================
+if (path === "/api/absensi" && method === "POST")
+  return absensiAdd(env, request);
+
+if (path === "/api/absensi" && method === "GET")
+  return absensiList(env);
+  
       // ==========================
       // BARANG
       // ==========================
@@ -267,7 +277,35 @@ function makeTID() {
   const rnd = Math.random().toString(16).slice(2, 7).toUpperCase();
   return `${ts}-${rnd}`;
 }
+//////////////////
+////// ABSEN 
+////////////////
 
+async function absensiAdd(env, req){
+  const b = await bodyJSON(req);
+  if(!b || !b.username || !b.lokasi || !b.waktu)
+    return json({ error:"username, lokasi, waktu required" }, 400);
+
+  await env.BMT_DB.prepare(`
+    INSERT INTO absensi(username, lokasi, waktu, created_at)
+    VALUES(?,?,?,?)
+  `).bind(
+    b.username,
+    b.lokasi,
+    b.waktu,
+    nowISO()
+  ).run();
+
+  return json({ ok:true });
+}
+
+async function absensiList(env){
+  const rows = await env.BMT_DB
+    .prepare("SELECT * FROM absensi ORDER BY id DESC")
+    .all();
+
+  return json({ items: rows.results || [] });
+}
 //////////////////////////////
 // BARANG CRUD
 //////////////////////////////
