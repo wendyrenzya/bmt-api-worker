@@ -457,10 +457,10 @@ async function listKategori(env) {
   });
 }
 
-//////////////////////////////
-// STOK MASUK
-//////////////////////////////
 
+        // ==========================
+// STOK MASUK (BATCH VERSION)
+// ==========================
 async function stokMasuk(env, req) {
   const b = await bodyJSON(req);
   if (!b) return json({ error: "body required" }, 400);
@@ -484,17 +484,16 @@ async function stokMasuk(env, req) {
   }
 
   // Filter invalid
-  items = items.filter(x => Number.isFinite(x.id) && Number.isFinite(x.jumlah) && x.jumlah > 0);
+  items = items.filter(x => x.id && x.jumlah > 0);
   if (!items.length) return json({ error: "invalid items" }, 400);
 
   const operator = b.dibuat_oleh || b.operator || "Admin";
   const now = nowISO();
   const tid = "MSK-" + makeTID();
 
-  // 1) Ambil stok semua ID sekaligus
+  // Ambil stok semua ID sekaligus
   const ids = items.map(x => x.id);
   const placeholders = ids.map(() => "?").join(",");
-  if (!placeholders) return json({ error: "invalid items" }, 400);
 
   let rows;
   try {
@@ -506,51 +505,38 @@ async function stokMasuk(env, req) {
     return json({ error: "DB select error: " + String(e) }, 500);
   }
 
-  // === PATCH ID FIX ===
   const dbMap = {};
-  (rows.results || []).forEach(r => {
-    const idNum = Number(r.id);
-    dbMap[idNum] = {
-      stock: Number(r.stock || 0),
-      nama: r.nama || ""
-    };
-  });
+  (rows.results || []).forEach(r => dbMap[r.id] = r);
 
-  // Validasi ID (dengan NUMBER)
+  // Validasi ID
   for (const it of items) {
-    if (!dbMap[Number(it.id)])
+    if (!dbMap[it.id])
       return json({ error: `barang id ${it.id} tidak ditemukan` }, 400);
   }
 
-  // 2) Mulai transaksi (D1-safe)
+  // Mulai transaksi (D1-safe)
   await env.BMT_DB.prepare("BEGIN").run();
 
   try {
     for (const it of items) {
-      const meta = dbMap[Number(it.id)];
+      const old = Number(dbMap[it.id].stock || 0);
+      const newStock = old + it.jumlah;
 
-      const old = Number(meta.stock || 0);
-      const newStock = old + Number(it.jumlah || 0);
+      // Update stok
+      await env.BMT_DB.prepare(
+        "UPDATE barang SET stock=? WHERE id=?"
+      ).bind(newStock, it.id).run();
 
-      // UPDATE stok
-      await env.BMT_DB.prepare("UPDATE barang SET stock=? WHERE id=?")
-        .bind(newStock, it.id).run();
-
-      // INSERT stok_masuk
+      // Insert stok_masuk
       await env.BMT_DB.prepare(`
         INSERT INTO stok_masuk(
           barang_id, jumlah, keterangan, dibuat_oleh, created_at, transaksi_id
         ) VALUES (?,?,?,?,?,?)
       `).bind(
-        it.id,
-        it.jumlah,
-        it.keterangan,
-        operator,
-        now,
-        tid
+        it.id, it.jumlah, it.keterangan, operator, now, tid
       ).run();
 
-      // INSERT riwayat
+      // Insert riwayat
       await env.BMT_DB.prepare(`
         INSERT INTO riwayat(
           tipe, barang_id, barang_nama, jumlah, harga, harga_modal,
@@ -559,7 +545,7 @@ async function stokMasuk(env, req) {
       `).bind(
         "masuk",
         it.id,
-        meta.nama || "",
+        dbMap[it.id].nama || "",
         it.jumlah,
         0,
         0,
@@ -571,13 +557,14 @@ async function stokMasuk(env, req) {
     }
 
     await env.BMT_DB.prepare("COMMIT").run();
+
   } catch (e) {
     await env.BMT_DB.prepare("ROLLBACK").run();
     return json({ error: "DB transaction error: " + String(e) }, 500);
   }
 
   return json({ ok: true, transaksi_id: tid });
-                   }
+}
 //////////////////////////////
 // STOK KELUAR
 //////////////////////////////
@@ -1634,3 +1621,4 @@ async function riwayatServisGet(env, req){
 // END OF FILE
 
 //////////////////////////////
+
