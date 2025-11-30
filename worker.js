@@ -462,165 +462,6 @@ async function listKategori(env) {
 //////////////////////////////
 
 async function stokMasuk(env, req) {
-  
-  const b = await bodyJSON(req);
-  if (!b) return json({ error: "body required" }, 400);
-
-  // Normalisasi items
-  let items = [];
-  if (Array.isArray(b.items) && b.items.length) {
-    items = b.items.map(it => ({
-      id: Number(it.id || it.id_barang || it.barang_id),
-      jumlah: Number(it.jumlah || it.qty || 0),
-      keterangan: it.keterangan || ""
-    }));
-  } else if (b.id || b.id_barang) {
-    items = [{
-      id: Number(b.id || b.id_barang),
-      jumlah: Number(b.jumlah || b.qty || 0),
-      keterangan: b.keterangan || ""
-    }];
-  } else {
-    return json({ error: "items[] or id_barang required" }, 400);
-  }
-
-  // Filter invalid
-  items = items.filter(x => x.id && x.jumlah > 0);
-  if (!items.length) return json({ error: "invalid items" }, 400);
-
-  const operator = b.dibuat_oleh || b.operator || "Admin";
-  const now = nowISO();
-  const tid = "MSK-" + makeTID();
-
-  // ================================
-  // 1) Ambil stok semua ID sekaligus
-  // ================================
-  const ids = items.map(x => x.id);
-  const placeholders = ids.map(() => "?").join(",");
-
-  let rows;
-  try {
-    rows = await env.BMT_DB
-      .prepare(`SELECT id, stock, nama FROM barang WHERE id IN (${placeholders})`)
-      .bind(...ids)
-      .all();
-  } catch (e) {
-    return json({ error: "DB select error: " + String(e) }, 500);
-  }
-
-  const dbMap = {};
-  (rows.results || []).forEach(r => dbMap[r.id] = r);
-
-  // Validasi ID barang
-  for (const it of items) {
-    if (!dbMap[it.id]) {
-      return json({ error: `barang id ${it.id} tidak ditemukan` }, 400);
-    }
-  }
-
-  // ================================
-  // 2) Mulai transaksi (D1 friendly)
-  // ================================
-  await env.BMT_DB.prepare("BEGIN").run();
-
-  try {
-
-    for (const it of items) {
-      const old = Number(dbMap[it.id].stock || 0);
-      const newStock = old + it.jumlah;
-
-      // Update stok
-      await env.BMT_DB.prepare(
-        `UPDATE barang SET stock=? WHERE id=?`
-      ).bind(newStock, it.id).run();
-
-      // Insert stok_masuk
-      await env.BMT_DB.prepare(`
-        INSERT INTO stok_masuk(
-          barang_id, jumlah, keterangan,
-          dibuat_oleh, created_at, transaksi_id
-        ) VALUES (?,?,?,?,?,?)
-      `).bind(
-        it.id,
-        it.jumlah,
-        it.keterangan,
-        operator,
-        now,
-        tid
-      ).run();
-
-      // Insert riwayat
-      await env.BMT_DB.prepare(`
-        INSERT INTO riwayat(
-          tipe, barang_id, barang_nama,
-          jumlah, harga, harga_modal,
-          catatan, dibuat_oleh,
-          created_at, transaksi_id
-        ) VALUES (?,?,?,?,?,?,?,?,?,?)
-      `).bind(
-        "masuk",
-        it.id,
-        dbMap[it.id].nama || "",
-        it.jumlah,
-        0,
-        0,
-        it.keterangan || "",
-        operator,
-        now,
-        tid
-      ).run();
-    }
-
-    // Commit transaksi
-    await env.BMT_DB.prepare("COMMIT").run();
-
-  } catch (e) {
-
-    await env.BMT_DB.prepare("ROLLBACK").run();
-    return json({ error: "DB transaction error: " + String(e) }, 500);
-  }
-
-  // Sukses
-  return json({ ok: true, transaksi_id: tid });
-      }
-
-  // Filter ID invalid
-  items = items.filter(x => x.id && x.jumlah > 0);
-  if (!items.length) return json({ error: "invalid items" }, 400);
-
-  const operator = b.dibuat_oleh || b.operator || "Admin";
-  const now = nowISO();
-  const tid = "MSK-" + makeTID();
-
-  // ================================
-  // 1) Ambil stok semua ID (pastikan IN tidak kosong)
-  // ================================
-  const ids = items.map(x => x.id);
-  const placeholders = ids.map(() => "?").join(",");
-
-  let rows;
-  try {
-    rows = await env.BMT_DB
-      .prepare(`SELECT id, stock, nama FROM barang WHERE id IN (${placeholders})`)
-      .bind(...ids)
-      .all();
-  } catch (e) {
-    return json({ error: "DB select error: " + String(e) }, 500);
-  }
-
-  const dbMap = {};
-  (rows.results || []).forEach(r => dbMap[r.id] = r);
-
-  // Validasi: pastikan semua id ditemukan
-  for (const it of items) {
-    if (!dbMap[it.id]) {
-      return json({ error: `barang id ${it.id} tidak ditemukan` }, 400);
-    }
-  }
-
-
-}
-async function stokMasuk(env, req) {
   const b = await bodyJSON(req);
   if (!b) return json({ error: "body required" }, 400);
 
@@ -650,11 +491,10 @@ async function stokMasuk(env, req) {
   const now = nowISO();
   const tid = "MSK-" + makeTID();
 
-  // ============================================
-  // 1) Ambil stok semua ID sekaligus (lebih efisien)
-  // ============================================
+  // 1) Ambil stok semua ID sekaligus
   const ids = items.map(x => x.id);
   const placeholders = ids.map(() => "?").join(",");
+  if (!placeholders) return json({ error: "invalid items" }, 400);
 
   let rows;
   try {
@@ -669,16 +509,11 @@ async function stokMasuk(env, req) {
   const dbMap = {};
   (rows.results || []).forEach(r => dbMap[r.id] = r);
 
-  // Pastikan semua ID valid
   for (const it of items) {
-    if (!dbMap[it.id]) {
-      return json({ error: `barang id ${it.id} tidak ditemukan` }, 400);
-    }
+    if (!dbMap[it.id]) return json({ error: `barang id ${it.id} tidak ditemukan` }, 400);
   }
 
-  // ============================================
-  // 2) Mulai transaksi aman (Cloudflare D1)
-  // ============================================
+  // 2) Mulai transaksi (D1-safe)
   await env.BMT_DB.prepare("BEGIN").run();
 
   try {
@@ -686,55 +521,35 @@ async function stokMasuk(env, req) {
       const old = Number(dbMap[it.id].stock || 0);
       const newStock = old + it.jumlah;
 
-      // UPDATE stok barang
-      await env.BMT_DB.prepare(
-        "UPDATE barang SET stock=? WHERE id=?"
-      ).bind(newStock, it.id).run();
+      await env.BMT_DB.prepare("UPDATE barang SET stock=? WHERE id=?")
+        .bind(newStock, it.id).run();
 
-      // INSERT stok_masuk
       await env.BMT_DB.prepare(`
         INSERT INTO stok_masuk(
-          barang_id, jumlah, keterangan,
-          dibuat_oleh, created_at, transaksi_id
+          barang_id, jumlah, keterangan, dibuat_oleh, created_at, transaksi_id
         ) VALUES (?,?,?,?,?,?)
-      `).bind(
-        it.id, it.jumlah, it.keterangan,
-        operator, now, tid
-      ).run();
+      `).bind(it.id, it.jumlah, it.keterangan, operator, now, tid).run();
 
-      // INSERT riwayat
       await env.BMT_DB.prepare(`
         INSERT INTO riwayat(
-          tipe, barang_id, barang_nama,
-          jumlah, harga, harga_modal,
-          catatan, dibuat_oleh,
-          created_at, transaksi_id
+          tipe, barang_id, barang_nama, jumlah, harga, harga_modal,
+          catatan, dibuat_oleh, created_at, transaksi_id
         ) VALUES (?,?,?,?,?,?,?,?,?,?)
       `).bind(
-        "masuk",
-        it.id,
-        dbMap[it.id].nama || "",
-        it.jumlah,
-        0,
-        0,
-        it.keterangan || "",
-        operator,
-        now,
-        tid
+        "masuk", it.id, dbMap[it.id].nama || "", it.jumlah, 0, 0,
+        it.keterangan || "", operator, now, tid
       ).run();
     }
 
     await env.BMT_DB.prepare("COMMIT").run();
-
   } catch (e) {
-
     await env.BMT_DB.prepare("ROLLBACK").run();
     return json({ error: "DB transaction error: " + String(e) }, 500);
   }
 
-  // Sukses
   return json({ ok: true, transaksi_id: tid });
 }
+
 
 //////////////////////////////
 // STOK KELUAR
@@ -745,79 +560,77 @@ async function stokKeluar(env, req) {
   if (!b || !Array.isArray(b.items) || !b.items.length)
     return json({ error: "items[] required" }, 400);
 
-  const items = b.items;
+  const items = b.items.map(it => ({
+    id: Number(it.id),
+    jumlah: Number(it.jumlah || it.qty || 0),
+    harga: Number(it.harga || 0),
+    keterangan: it.keterangan || "",
+    nama: it.nama || ""
+  }));
+
   const operator = b.dibuat_oleh || b.operator || "Admin";
   const now = nowISO();
   const tid = b.transaksi_id || "PJL-" + makeTID();
 
+  // 1) Ambil stok semua barang sekali
+  const idList = items.map(it => it.id);
+  const placeholders = idList.map(() => "?").join(",");
+  
+  const barangRows = await env.BMT_DB.prepare(
+    `SELECT id, stock FROM barang WHERE id IN (${placeholders})`
+  ).bind(...idList).all();
+
+  const stokMap = {};
+  for (const r of (barangRows.results || [])) {
+    stokMap[r.id] = Number(r.stock || 0);
+  }
+
+  // 2) Hitung stok baru
   for (const it of items) {
-    if (!it.id) continue;
+    const lama = stokMap[it.id] ?? 0;
+    stokMap[it.id] = lama - Number(it.jumlah);
+  }
 
-    const row = await env.BMT_DB
-      .prepare(`SELECT stock FROM barang WHERE id=?`)
-      .bind(it.id)
-      .first();
-    if (!row) continue;
+  // 3) Update stok
+  for (const it of items) {
+    await env.BMT_DB.prepare(
+      "UPDATE barang SET stock=? WHERE id=?"
+    ).bind(stokMap[it.id], it.id).run();
+  }
 
-    const newStock =
-      Number(row.stock || 0) - Number(it.jumlah || it.qty || 0);
+  // 4) Insert stok_keluar + riwayat
+  for (const it of items) {
+    await env.BMT_DB.prepare(
+      `INSERT INTO stok_keluar(
+         barang_id,jumlah,harga,dibuat_oleh,keterangan,created_at,transaksi_id
+       ) VALUES (?,?,?,?,?,?,?)`
+    ).bind(
+      it.id, it.jumlah, it.harga, operator, it.keterangan, now, tid
+    ).run();
 
-    await env.BMT_DB
-      .prepare(`UPDATE barang SET stock=? WHERE id=?`)
-      .bind(newStock, it.id)
-      .run();
-
-    await env.BMT_DB
-      .prepare(
-        `INSERT INTO stok_keluar(
-        barang_id,jumlah,harga,dibuat_oleh,keterangan,created_at,transaksi_id
-      ) VALUES (?,?,?,?,?,?,?)`
-      )
-      .bind(
-        it.id,
-        it.jumlah || it.qty || 0,
-        it.harga || 0,
-        operator,
-        it.keterangan || "",
-        now,
-        tid
-      )
-      .run();
-    
-// PATCH RIWAYAT — STOK KELUAR (KOMPATIBEL)
-await env.BMT_DB.prepare(
-  `INSERT INTO riwayat(
-    tipe,
-    barang_id,
-    barang_nama,
-    jumlah,
-    harga,
-    harga_modal,
-    catatan,
-    dibuat_oleh,
-    created_at,
-    transaksi_id
-  ) VALUES (?,?,?,?,?,?,?,?,?,?)`
-).bind(
-  "keluar",
-  it.id,
-  it.nama || "",           // ← WAJIB ADA, STRING KOSONG AMAN
-  it.jumlah || it.qty || 0,
-  it.harga || 0,
-  0,                       // harga_modal
-  it.keterangan || "",     // catatan, kolom WAJIB DIISI
-  operator,
-  now,
-  tid
-).run();
+    await env.BMT_DB.prepare(
+      `INSERT INTO riwayat(
+         tipe, barang_id, barang_nama,
+         jumlah, harga, harga_modal,
+         catatan, dibuat_oleh, created_at, transaksi_id
+       ) VALUES (?,?,?,?,?,?,?,?,?,?)`
+    ).bind(
+      "keluar",
+      it.id,
+      it.nama || "",
+      it.jumlah,
+      it.harga,
+      0,
+      it.keterangan || "",
+      operator,
+      now,
+      tid
+    ).run();
   }
 
   return json({ ok: true, transaksi_id: tid });
 }
 
-//////////////////////////////
-// STOK AUDIT
-//////////////////////////////
 
 //////////////////////////////
 // STOK AUDIT (FORMAT BARU ONLY)
@@ -833,70 +646,119 @@ async function stokAudit(env, req) {
   const now = nowISO();
   const tid = "AUD-" + makeTID();
 
+  // ------------------------------------------------
+  // 1) Ambil semua ID dalam 1 kali SELECT
+  // ------------------------------------------------
+  const idList = b.items
+    .map(it => Number(it.barang_id))
+    .filter(id => !isNaN(id));
+
+  const placeholders = idList.map(() => "?").join(",");
+
+  const oldRows = await env.BMT_DB.prepare(
+    `SELECT id, stock, nama 
+     FROM barang 
+     WHERE id IN (${placeholders})`
+  ).bind(...idList).all();
+
+  const stokMap = {};
+  const namaMap = {};
+
+  for (const r of (oldRows.results || [])) {
+    stokMap[r.id] = Number(r.stock || 0);
+    namaMap[r.id] = r.nama || "";
+  }
+
+  // ------------------------------------------------
+  // 2) Hitung stok baru di memori
+  // ------------------------------------------------
+  const updates = [];      // batch update barang
+  const insertsAudit = []; // batch audit
+  const insertsRwy = [];   // batch riwayat
+
   for (const it of b.items) {
-    const barang_id = Number(it.barang_id);
-    const stok_baru = Number(it.stok_baru);
+    const id = Number(it.barang_id);
+    const stokBaru = Number(it.stok_baru);
     const ket = it.keterangan || "";
 
-    if (!barang_id || isNaN(stok_baru)) continue;
+    if (!id || isNaN(stokBaru)) continue;
 
-    const getOld = await env.BMT_DB
-      .prepare("SELECT stock, nama FROM barang WHERE id=?")
-      .bind(barang_id)
-      .first();
+    const stokLama = stokMap[id] ?? 0;
+    stokMap[id] = stokBaru;
 
-    const stok_lama = Number(getOld?.stock || 0);
-    const namaBarang = getOld?.nama || "";
+    updates.push({ id, stokBaru });
 
-    // UPDATE STOK
-    await env.BMT_DB
-      .prepare("UPDATE barang SET stock=? WHERE id=?")
-      .bind(stok_baru, barang_id)
-      .run();
+    insertsAudit.push({
+      id,
+      stokLama,
+      stokBaru,
+      ket
+    });
 
-    // INSERT stok_audit
-    await env.BMT_DB
-      .prepare(`
-        INSERT INTO stok_audit(
-          barang_id, stok_lama, stok_baru,
-          keterangan, dibuat_oleh, created_at, transaksi_id
-        )
-        VALUES (?,?,?,?,?,?,?)
-      `)
-      .bind(
-        barang_id,
-        stok_lama,
-        stok_baru,
-        ket,
-        operator,
-        now,
-        tid
-      ).run();
+    insertsRwy.push({
+      id,
+      stokLama,
+      stokBaru,
+      ket,
+      nama: namaMap[id] || ""
+    });
+  }
 
-    // INSERT ke RIWAYAT
-    await env.BMT_DB
-      .prepare(`
-        INSERT INTO riwayat(
-          transaksi_id, tipe, barang_id,
-          jumlah, harga,
-          dibuat_oleh, catatan, created_at,
-          stok_lama, stok_baru, barang_nama
-        )
-        VALUES (?,?,?,?,?,?,?,?,?,?,?)
-      `)
-      .bind(
-        tid,
-        "audit",
-        barang_id,
-        stok_baru - stok_lama,
-        0,
-        operator,
-        ket,
-        now,
-        stok_lama,
-        stok_baru,
-        namaBarang
-      ).run();
+  // ------------------------------------------------
+  // 3) UPDATE stok barang
+  // ------------------------------------------------
+  for (const u of updates) {
+    await env.BMT_DB.prepare(
+      "UPDATE barang SET stock=? WHERE id=?"
+    ).bind(u.stokBaru, u.id).run();
+  }
+
+  // ------------------------------------------------
+  // 4) INSERT stok_audit
+  // ------------------------------------------------
+  for (const a of insertsAudit) {
+    await env.BMT_DB.prepare(
+      `INSERT INTO stok_audit(
+         barang_id, stok_lama, stok_baru,
+         keterangan, dibuat_oleh,
+         created_at, transaksi_id
+       ) VALUES (?,?,?,?,?,?,?)`
+    ).bind(
+      a.id,
+      a.stokLama,
+      a.stokBaru,
+      a.ket,
+      operator,
+      now,
+      tid
+    ).run();
+  }
+
+  // ------------------------------------------------
+  // 5) INSERT riwayat (audit)
+  // ------------------------------------------------
+  for (const r of insertsRwy) {
+    await env.BMT_DB.prepare(
+      `INSERT INTO riwayat(
+         transaksi_id, tipe, barang_id,
+         jumlah, harga,
+         dibuat_oleh, catatan, created_at,
+         stok_lama, stok_baru, barang_nama
+       )
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+    ).bind(
+      tid,
+      "audit",
+      r.id,
+      r.stokBaru - r.stokLama,   // delta stok
+      0,
+      operator,
+      r.ket,
+      now,
+      r.stokLama,
+      r.stokBaru,
+      r.nama
+    ).run();
   }
 
   return json({ ok: true, transaksi_id: tid });
@@ -964,79 +826,71 @@ async function servisDetail(env, req) {
 
 async function servisSelesai(env, req) {
   const id_servis = Number(req.url.split("/").pop());
+  const body = await bodyJSON(req);     // FIX: body wajib diambil
   const now = nowISO();
 
+  // Ambil data servis untuk transaksi_id
+  const row = await env.BMT_DB
+    .prepare("SELECT transaksi_id FROM servis WHERE id_servis=?")
+    .bind(id_servis)
+    .first();
+
+  if (!row || !row.transaksi_id) {
+    return json({ error: "servis not found" }, 404);
+  }
+
+  const tid = row.transaksi_id;
+  const user = body?.user || "system";
+
+  // Update status servis menjadi selesai
   await env.BMT_DB
     .prepare(`UPDATE servis SET status='selesai', selesai_at=? WHERE id_servis=?`)
     .bind(now, id_servis)
     .run();
 
-  // === PATCH MULTI CHARGE (TIDAK MASUK STOK KELUAR) ===
-if (Array.isArray(body.charge_list)) {
-  for (const chg of body.charge_list) {
+  // ==========================
+  // MULTI CHARGE (BARU)
+  // ==========================
+  if (Array.isArray(body?.charge_list)) {
+    for (const chg of body.charge_list) {
+      if (!chg.nama || !Number(chg.harga)) continue;
 
-    if (!chg.nama || !Number(chg.harga)) continue;
-
-    await env.BMT_DB.prepare(`
-      INSERT INTO riwayat(
-        tipe,
-        barang_id,
-        barang_nama,
-        jumlah,
-        harga,
-        harga_modal,
-        catatan,
-        keterangan,
-        dibuat_oleh,
-        created_at,
-        transaksi_id,
-        stok_lama,
-        stok_baru
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-    `).bind(
-      "charge",                // <=== TIPE BARU, BUKAN 'keluar'
-      0,                       // tidak ada barang
-      "",                      // tidak ada barang
-      1,                       // qty 1
-      Number(chg.harga),       // nilai charge
-      0,
-      chg.nama,                // nama charge dari dropdown
-      "#CHG_FOR=" + tid,       // TAG pengait servis
-      body.user || "system",
-      nowISO(),
-      tid,
-      null,
-      null
-    ).run();
+      await env.BMT_DB.prepare(`
+        INSERT INTO riwayat(
+          tipe,
+          barang_id,
+          barang_nama,
+          jumlah,
+          harga,
+          harga_modal,
+          catatan,
+          keterangan,
+          dibuat_oleh,
+          created_at,
+          transaksi_id,
+          stok_lama,
+          stok_baru
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+      `).bind(
+        "charge",
+        0,                       // tidak pakai barang
+        "",
+        1,                       // qty 1
+        Number(chg.harga),
+        0,
+        chg.nama,                // nama charge
+        "#CHG_FOR=" + tid,       // tag pengait
+        user,
+        now,
+        tid,
+        null,
+        null
+      ).run();
+    }
   }
-}
-  
-  return json({ ok: true });
-}
-
-async function servisBatal(env, req) {
-  const id_servis = Number(req.url.split("/").pop());
-
-  await env.BMT_DB
-    .prepare(`UPDATE servis SET status='batal' WHERE id_servis=?`)
-    .bind(id_servis)
-    .run();
 
   return json({ ok: true });
 }
-
-async function servisUpdateBiaya(env, req) {
-  const id_servis = Number(req.url.split("/").pop());
-  const b = await bodyJSON(req);
-
-  await env.BMT_DB
-    .prepare(`UPDATE servis SET biaya_servis=? WHERE id_servis=?`)
-    .bind(Number(b.biaya_servis || 0), id_servis)
-    .run();
-
-  return json({ ok: true });
-}
-
 // ==========================================================
 // 6b) UPDATE ITEMS SERVIS (ENDPOINT BARU)
 // ==========================================================
@@ -1751,9 +1605,4 @@ async function riwayatServisGet(env, req){
 }
 //////////////////////////////
 // END OF FILE
-
 //////////////////////////////
-
-
-
-
