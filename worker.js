@@ -219,6 +219,9 @@ if (path === "/api/laporan/harian/summary" && method === "GET")
 
 if (path === "/api/laporan/harian" && method === "POST")
   return laporanHarianSave(env, request);
+  
+  if (path === "/api/laporan/harian/list" && method === "GET")
+  return laporanHarianList(env);
 
 if (path === "/api/laporan/detail" && method === "GET")
   return laporanDetail(env, url);
@@ -1331,40 +1334,29 @@ async function laporanHarianRange(env, url) {
 
 async function laporanHarianSummary(env) {
   try {
-    await env.BMT_DB.prepare(`
-      CREATE TABLE IF NOT EXISTS laporan_harian (
-        tanggal TEXT PRIMARY KEY,
-        penjualan_cash INTEGER DEFAULT 0,
-        penjualan_transfer INTEGER DEFAULT 0,
-        pengeluaran INTEGER DEFAULT 0,
-        charge INTEGER DEFAULT 0,
-        created_at TEXT
-      )
-    `).run();
-
     const today = new Date().toISOString().slice(0,10);
-    let row = await env.BMT_DB.prepare(`
-      SELECT * FROM laporan_harian WHERE tanggal=? LIMIT 1
+
+    const row = await env.BMT_DB.prepare(`
+      SELECT *
+      FROM laporan_harian
+      WHERE tanggal=?
+      LIMIT 1
     `).bind(today).first();
 
-    if (!row) {
-      row = await env.BMT_DB.prepare(`
-        SELECT * FROM laporan_harian ORDER BY tanggal DESC LIMIT 1
-      `).first() || {};
-    }
-
     return json({
-      tanggal: row?.tanggal || null,
+      tanggal: today,
       penjualan_cash: Number(row?.penjualan_cash || 0),
       penjualan_transfer: Number(row?.penjualan_transfer || 0),
       pengeluaran: Number(row?.pengeluaran || 0),
-      charge: Number(row?.charge || 0)
+      charge: Number(row?.charge || 0),
+      uang_angin: Number(row?.uang_angin || 0),
+      charge_servis: Number(row?.charge_servis || 0)
     });
+
   } catch (e) {
-    return json({ error: String(e) }, 500);
+    return json({ error:String(e) }, 500);
   }
 }
-
 async function laporanHarianSave(env, request) {
   const b = await bodyJSON(request);
   if (!b?.tanggal) return json({ error:"tanggal required" },400);
@@ -1372,38 +1364,91 @@ async function laporanHarianSave(env, request) {
   const t = String(b.tanggal).slice(0,10);
   const now = new Date().toISOString();
 
+  const penjualan_cash      = Number(b.penjualan_cash || 0);
+  const penjualan_transfer  = Number(b.penjualan_transfer || 0);
+  const pengeluaran         = Number(b.pengeluaran || 0);
+
+  const uang_angin     = Number(b.uang_angin || 0);
+  const charge_servis  = Number(b.charge_servis || 0);
+
+  const charge_total = uang_angin + charge_servis;
+
   try {
     await env.BMT_DB.prepare(`
-      CREATE TABLE IF NOT EXISTS laporan_harian (
-        tanggal TEXT PRIMARY KEY,
-        penjualan_cash INTEGER DEFAULT 0,
-        penjualan_transfer INTEGER DEFAULT 0,
-        pengeluaran INTEGER DEFAULT 0,
-        charge INTEGER DEFAULT 0,
-        created_at TEXT
+      INSERT INTO laporan_harian (
+        tanggal,
+        penjualan_cash,
+        penjualan_transfer,
+        pengeluaran,
+        charge,
+        created_at,
+        uang_angin,
+        charge_servis
       )
-    `).run();
-
-    await env.BMT_DB.prepare(`
-      INSERT INTO laporan_harian VALUES(?,?,?,?,?,?)
+      VALUES (?,?,?,?,?,?,?,?)
       ON CONFLICT(tanggal) DO UPDATE SET
         penjualan_cash=excluded.penjualan_cash,
         penjualan_transfer=excluded.penjualan_transfer,
         pengeluaran=excluded.pengeluaran,
         charge=excluded.charge,
-        created_at=excluded.created_at
+        created_at=excluded.created_at,
+        uang_angin=excluded.uang_angin,
+        charge_servis=excluded.charge_servis
     `).bind(
       t,
-      Number(b.penjualan_cash || 0),
-      Number(b.penjualan_transfer || 0),
-      Number(b.pengeluaran || 0),
-      Number(b.charge || 0),
-      now
+      penjualan_cash,
+      penjualan_transfer,
+      pengeluaran,
+      charge_total,
+      now,
+      uang_angin,
+      charge_servis
     ).run();
 
     return json({ ok:true, tanggal:t });
+
   } catch (e) {
     return json({ error:String(e) },500);
+  }
+}
+
+async function laporanHarianList(env) {
+  try {
+    const rows = await env.BMT_DB.prepare(`
+      SELECT *
+      FROM laporan_harian
+      ORDER BY tanggal DESC
+    `).all();
+
+    const items = (rows.results || []).map(r => {
+      const cash   = Number(r.penjualan_cash || 0);
+      const tf     = Number(r.penjualan_transfer || 0);
+      const out    = Number(r.pengeluaran || 0);
+      const angin  = Number(r.uang_angin || 0);
+      const srv    = Number(r.charge_servis || 0);
+
+      const charge_total = angin + srv;
+      const penjualan_total = cash + tf;
+      const total_setoran = (penjualan_total + charge_total) - out;
+
+      return {
+        tanggal: r.tanggal,
+        penjualan_cash: cash,
+        penjualan_transfer: tf,
+        pengeluaran: out,
+        uang_angin: angin,
+        charge_servis: srv,
+        charge: charge_total,
+        penjualan_total,
+        total_setoran,
+        created_at: r.created_at
+      };
+    });
+
+    return json({ items });
+
+  } catch (e) {
+    return json({ error:String(e) }, 500);
   }
 }
 
