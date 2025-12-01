@@ -1478,6 +1478,73 @@ async function laporanHarianRange(env, url){
   return json(hasil);
 }
 
+async function laporanHarianSave(env, req){
+  const b = await bodyJSON(req);
+  if(!b || !b.tanggal)
+    return json({ error:"tanggal required" }, 400);
+
+  const now = nowISO();
+
+  const total_setoran =
+      Number(b.penjualan_cash||0)
+    + Number(b.penjualan_transfer||0)
+    + Number(b.uang_angin||0)
+    + Number(b.charge_servis||0)
+    - Number(b.pengeluaran||0);
+
+  await env.BMT_DB.prepare(`
+    INSERT OR REPLACE INTO laporan_harian(
+      tanggal,
+      penjualan_total,
+      penjualan_cash,
+      penjualan_transfer,
+      pengeluaran,
+      uang_angin,
+      charge_servis,
+      total_setoran,
+      created_at
+    ) VALUES (?,?,?,?,?,?,?,?,?)
+  `).bind(
+    b.tanggal,
+    Number(b.penjualan_total || b.penjualan_cash + b.penjualan_transfer || 0),
+    Number(b.penjualan_cash || 0),
+    Number(b.penjualan_transfer || 0),
+    Number(b.pengeluaran || 0),
+    Number(b.uang_angin || 0),
+    Number(b.charge_servis || 0),
+    total_setoran,
+    now
+  ).run();
+
+  return json({ ok:true });
+}
+async function laporanHarianList(env){
+  const rows = await env.BMT_DB.prepare(`
+    SELECT *
+    FROM laporan_harian
+    ORDER BY tanggal DESC
+  `).all();
+
+  return json({ items: rows.results || [] });
+}
+async function laporanHarianSummary(env){
+  const row = await env.BMT_DB.prepare(`
+    SELECT *
+    FROM laporan_harian
+    WHERE tanggal = DATE('now')
+    LIMIT 1
+  `).first();
+
+  return json({
+    tanggal: row?.tanggal || new Date().toISOString().slice(0,10),
+    penjualan_cash: Number(row?.penjualan_cash || 0),
+    penjualan_transfer: Number(row?.penjualan_transfer || 0),
+    pengeluaran: Number(row?.pengeluaran || 0),
+    charge_servis: Number(row?.charge_servis || 0),
+    uang_angin: Number(row?.uang_angin || 0),
+    total_setoran: Number(row?.total_setoran || 0)
+  });
+}
 //////////////////////////////
 // END OF FILE
 //////////////////////////////
