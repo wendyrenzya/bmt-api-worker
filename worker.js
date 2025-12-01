@@ -225,7 +225,21 @@ if (path === "/api/laporan/harian" && method === "POST")
 
 if (path === "/api/laporan/detail" && method === "GET")
   return laporanDetail(env, url);
+    
+// ==========================
+      // BONUS
+      // ==========================
+      if (path === "/api/bonus/riwayat" && method === "GET")
+        return bonusRiwayat(env, url);
+
+      if (path === "/api/bonus/achieved" && method === "POST")
+        return bonusAchieved(env, request);
+
+      if (path === "/api/bonus/status" && method === "POST")
+        return bonusUpdateStatus(env, request);
+
       
+  
       // ==========================
       // HEALTH
       // ==========================
@@ -1556,6 +1570,86 @@ async function riwayatServisGet(env, req){
     .first();
 
   return json({ item: row || null });
+}
+// ================================
+// BONUS: HELPER
+// ================================
+async function bodyJSON(req){
+  try{
+    return await req.json();
+  }catch(e){
+    return null;
+  }
+}
+
+function nowISO(){
+  return new Date().toISOString();
+}
+
+//
+// ================================
+// BONUS: GET RIWAYAT PER USER
+// /api/bonus/riwayat?user=nama
+// ================================
+async function bonusRiwayat(env, url){
+  const user = url.searchParams.get("user") || "";
+
+  const rows = await env.BMT_DB.prepare(`
+    SELECT *
+    FROM bonus_riwayat
+    WHERE username=?
+    ORDER BY id DESC
+  `).bind(user).all();
+
+  return json({ items: rows.results || [] });
+}
+
+//
+// ================================
+// BONUS: CATAT ACHIEVED TARGET
+// /api/bonus/achieved
+// ================================
+async function bonusAchieved(env, req){
+  const b = await bodyJSON(req);
+
+  if(!b || !b.username || !b.tanggal || !b.nilai){
+    return json({ error: "username, tanggal, nilai required" }, 400);
+  }
+
+  await env.BMT_DB.prepare(`
+    INSERT INTO bonus_riwayat(username, tanggal, nilai, status, created_at)
+    VALUES(?,?,?,?,?)
+  `).bind(
+    b.username,
+    b.tanggal,
+    Number(b.nilai || 0),
+    b.status || "belum",
+    nowISO()
+  ).run();
+
+  return json({ ok: true });
+}
+
+//
+// ================================
+// BONUS: UPDATE STATUS (1x SAJA)
+// /api/bonus/status
+// ================================
+async function bonusUpdateStatus(env, req){
+  const b = await bodyJSON(req);
+
+  if(!b || !b.id || !b.status){
+    return json({ error: "id & status required" }, 400);
+  }
+
+  // update langsung → karena aturanmu: hanya boleh "belum" → "sudah"
+  await env.BMT_DB.prepare(`
+    UPDATE bonus_riwayat
+    SET status=?
+    WHERE id=?
+  `).bind(b.status, b.id).run();
+
+  return json({ ok: true });
 }
 //////////////////////////////
 // END OF FILE
