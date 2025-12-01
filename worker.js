@@ -76,12 +76,23 @@ if (path === "/api/absensi" && method === "GET")
         return servisUpdateBiaya(env, request);
 
       // 3) SELESAI SERVIS
-      if (path.startsWith("/api/servis/selesai/") && method === "PUT")
-        return servisSelesai(env, request);
+     if (path.startsWith("/api/servis/selesai/") && method === "PUT") {
+  const id_servis = Number(path.split("/").pop());
+  return servisSelesai(env, request, { id: id_servis });
+}
 
       // 4) BATAL SERVIS
-      if (path.startsWith("/api/servis/batal/") && method === "PUT")
-        return servisBatal(env, request);
+   if (path.startsWith("/api/servis/batal/") && method === "PUT") {
+  const id_servis = Number(path.split("/").pop());
+  return servisBatal(env, request, { id: id_servis });
+}
+// ====================================
+// BATAL CHARGE (KHUSUS CHG-…)
+// ====================================
+if (path.startsWith("/api/servis/charge/batal/") && method === "PUT") {
+  const id_servis = Number(path.split("/").pop());
+  return servisBatalCharge(env, id_servis);
+}
 
       // 5) LIST SERVIS
       if (path === "/api/servis" && method === "GET")
@@ -793,6 +804,16 @@ async function servisDetail(env, req) {
   }
 
   return json({ item: row });
+}
+
+async function servisBatalCharge(env, id_servis){
+  await env.BMT_DB.prepare(`
+    UPDATE servis
+    SET status='batal'
+    WHERE id_servis=?
+  `).bind(id_servis).run();
+
+  return json({ ok:true });
 }
 
 async function servisSelesai(env, req, params) {
