@@ -1475,7 +1475,7 @@ async function laporanHarianRange(env, url){
   // Sort ascending by date
   const hasil = Object.values(map).sort((a,b)=>a.tanggal.localeCompare(b.tanggal));
 
-  return json({ items: hasil });
+  return json(hasil);
 }
 
 //////////////////////////////
