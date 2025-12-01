@@ -1313,20 +1313,6 @@ async function riwayatServisGet(env, req){
 
   return json({ item: row || null });
 }
-// ================================
-// BONUS: HELPER
-// ================================
-async function bodyJSON(req){
-  try{
-    return await req.json();
-  }catch(e){
-    return null;
-  }
-}
-
-function nowISO(){
-  return new Date().toISOString();
-}
 
 //
 // ================================
