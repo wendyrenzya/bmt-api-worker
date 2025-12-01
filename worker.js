@@ -225,7 +225,22 @@ if (path === "/api/laporan/harian" && method === "POST")
 
 if (path === "/api/laporan/detail" && method === "GET")
   return laporanDetail(env, url);
+    
+// ==========================
+      // BONUS
+      // ==========================
+      if (path === "/api/bonus/riwayat" && method === "GET")
+        return bonusRiwayat(env, url);
+
+      if (path === "/api/bonus/achieved" && method === "POST")
+        return bonusAchieved(env, request);
+
+      if (path === "/api/bonus/status" && method === "POST")
+        return bonusUpdateStatus(env, request);
+
       
+  
+
       // ==========================
       // HEALTH
       // ==========================
@@ -1254,266 +1269,7 @@ async function pengeluaranDelete(env, req) {
 // LAPORAN — HANDLERS
 ///////////////////////////////////////////////////////////////
 
-async function laporanBulanan(env, url) {
-  const month = url.searchParams.get("bulan") || new Date().toISOString().slice(0,7);
-  const start = `${month}-01T00:00:00Z`;
-  const [y, m] = month.split("-").map(Number);
-  const end = new Date(Date.UTC(y, m, 1)).toISOString();
 
-  try {
-    let pen = await env.BMT_DB.prepare(`
-      SELECT IFNULL(SUM(harga * jumlah),0) AS total FROM stok_keluar
-      WHERE transaksi_id LIKE 'PJL-%' AND created_at >= ? AND created_at < ?
-    `).bind(start, end).first();
-
-    let chg = await env.BMT_DB.prepare(`
-      SELECT IFNULL(SUM(biaya_servis),0) AS total FROM servis
-      WHERE catatan LIKE '%#CHG_FOR=%' AND created_at >= ? AND created_at < ?
-    `).bind(start, end).first();
-
-    let out = await env.BMT_DB.prepare(`
-      SELECT IFNULL(SUM(jumlah),0) AS total FROM pengeluaran
-      WHERE created_at >= ? AND created_at < ?
-    `).bind(start, end).first();
-
-    return json({
-      total_penjualan: Number(pen.total || 0),
-      total_charge: Number(chg.total || 0),
-      total_pengeluaran: Number(out.total || 0)
-    });
-  } catch (e) {
-    return json({ error: String(e) }, 500);
-  }
-}
-
-async function laporanHarianRange(env, url) {
-  const start = url.searchParams.get("start");
-  const end = url.searchParams.get("end");
-  if (!start || !end) return json({ error: "start & end required" }, 400);
-
-  const startISO = `${start}T00:00:00Z`;
-  const endISO = new Date(new Date(end).getTime() + 86400000).toISOString();
-
-  try {
-    let penRows = await env.BMT_DB.prepare(`
-      SELECT substr(created_at,1,10) AS tanggal, IFNULL(SUM(harga * jumlah),0) AS penjualan
-      FROM stok_keluar
-      WHERE transaksi_id LIKE 'PJL-%' AND created_at >= ? AND created_at < ?
-      GROUP BY substr(created_at,1,10)
-    `).bind(startISO, endISO).all();
-
-    let outRows = await env.BMT_DB.prepare(`
-      SELECT substr(created_at,1,10) AS tanggal, IFNULL(SUM(jumlah),0) AS pengeluaran
-      FROM pengeluaran
-      WHERE created_at >= ? AND created_at < ?
-      GROUP BY substr(created_at,1,10)
-    `).bind(startISO, endISO).all();
-
-    const pens = Object.fromEntries((penRows.results||[]).map(x=>[x.tanggal,Number(x.penjualan)]));
-    const outs = Object.fromEntries((outRows.results||[]).map(x=>[x.tanggal,Number(x.pengeluaran)]));
-
-    const days = [];
-    let d = new Date(start);
-    const last = new Date(end);
-
-    while (d <= last) {
-      const iso = d.toISOString().slice(0,10);
-      days.push({
-        tanggal: iso,
-        penjualan: pens[iso] || 0,
-        pengeluaran: outs[iso] || 0
-      });
-      d.setDate(d.getDate() + 1);
-    }
-
-    return json(days);
-  } catch (e) {
-    return json({ error: String(e) }, 500);
-  }
-}
-
-async function laporanHarianSummary(env) {
-  try {
-    const today = new Date().toISOString().slice(0,10);
-
-    const row = await env.BMT_DB.prepare(`
-      SELECT *
-      FROM laporan_harian
-      WHERE tanggal=?
-      LIMIT 1
-    `).bind(today).first();
-
-    return json({
-      tanggal: today,
-      penjualan_cash: Number(row?.penjualan_cash || 0),
-      penjualan_transfer: Number(row?.penjualan_transfer || 0),
-      pengeluaran: Number(row?.pengeluaran || 0),
-      charge: Number(row?.charge || 0),
-      uang_angin: Number(row?.uang_angin || 0),
-      charge_servis: Number(row?.charge_servis || 0)
-    });
-
-  } catch (e) {
-    return json({ error:String(e) }, 500);
-  }
-}
-async function laporanHarianSave(env, request) {
-  const b = await bodyJSON(request);
-  if (!b?.tanggal) return json({ error:"tanggal required" },400);
-
-  const t = String(b.tanggal).slice(0,10);
-  const now = new Date().toISOString();
-
-  const penjualan_cash      = Number(b.penjualan_cash || 0);
-  const penjualan_transfer  = Number(b.penjualan_transfer || 0);
-  const pengeluaran         = Number(b.pengeluaran || 0);
-
-  const uang_angin     = Number(b.uang_angin || 0);
-  const charge_servis  = Number(b.charge_servis || 0);
-
-  const charge_total = uang_angin + charge_servis;
-
-  try {
-    await env.BMT_DB.prepare(`
-      INSERT INTO laporan_harian (
-        tanggal,
-        penjualan_cash,
-        penjualan_transfer,
-        pengeluaran,
-        charge,
-        created_at,
-        uang_angin,
-        charge_servis
-      )
-      VALUES (?,?,?,?,?,?,?,?)
-      ON CONFLICT(tanggal) DO UPDATE SET
-        penjualan_cash=excluded.penjualan_cash,
-        penjualan_transfer=excluded.penjualan_transfer,
-        pengeluaran=excluded.pengeluaran,
-        charge=excluded.charge,
-        created_at=excluded.created_at,
-        uang_angin=excluded.uang_angin,
-        charge_servis=excluded.charge_servis
-    `).bind(
-      t,
-      penjualan_cash,
-      penjualan_transfer,
-      pengeluaran,
-      charge_total,
-      now,
-      uang_angin,
-      charge_servis
-    ).run();
-
-    return json({ ok:true, tanggal:t });
-
-  } catch (e) {
-    return json({ error:String(e) },500);
-  }
-}
-
-async function laporanHarianList(env) {
-  try {
-    const rows = await env.BMT_DB.prepare(`
-      SELECT *
-      FROM laporan_harian
-      ORDER BY tanggal DESC
-    `).all();
-
-    const items = (rows.results || []).map(r => {
-      const cash   = Number(r.penjualan_cash || 0);
-      const tf     = Number(r.penjualan_transfer || 0);
-      const out    = Number(r.pengeluaran || 0);
-      const angin  = Number(r.uang_angin || 0);
-      const srv    = Number(r.charge_servis || 0);
-
-      const charge_total = angin + srv;
-      const penjualan_total = cash + tf;
-      const total_setoran = (penjualan_total + charge_total) - out;
-
-      return {
-        tanggal: r.tanggal,
-        penjualan_cash: cash,
-        penjualan_transfer: tf,
-        pengeluaran: out,
-        uang_angin: angin,
-        charge_servis: srv,
-        charge: charge_total,
-        penjualan_total,
-        total_setoran,
-        created_at: r.created_at
-      };
-    });
-
-    return json({ items });
-
-  } catch (e) {
-    return json({ error:String(e) }, 500);
-  }
-}
-
-async function laporanDetail(env, url) {
-  const dari = url.searchParams.get("dari");
-  const sampai = url.searchParams.get("sampai");
-  if (!dari || !sampai) return json({error:"dari & sampai required"},400);
-
-  const startISO = `${dari}T00:00:00Z`;
-  const endISO = new Date(new Date(sampai).getTime()+86400000).toISOString();
-
-  try {
-    const r = await env.BMT_DB.prepare(`
-      SELECT * FROM riwayat
-      WHERE created_at >= ? AND created_at < ?
-      ORDER BY created_at ASC
-    `).bind(startISO,endISO).all();
-
-    const map = {};
-
-    for (const x of (r.results||[])) {
-      const tid = x.transaksi_id;
-      if (!map[tid]) map[tid] = {
-        tanggal: x.created_at.slice(0,10),
-        transaksi_id: tid,
-        tipe: x.tipe,
-        jumlah: 0
-      };
-      const sub = (Number(x.harga||0) * Number(x.jumlah||0)) || Number(x.jumlah||0);
-      map[tid].jumlah += sub;
-    }
-
-    const pg = await env.BMT_DB.prepare(`
-      SELECT * FROM pengeluaran
-      WHERE created_at >= ? AND created_at < ?
-    `).bind(startISO,endISO).all();
-
-    for (const p of (pg.results||[])) {
-      map[`OUT-${p.id}`] = {
-        tanggal: p.created_at.slice(0,10),
-        transaksi_id: `OUT-${p.id}`,
-        tipe: "pengeluaran",
-        jumlah: Number(p.jumlah||0)
-      };
-    }
-
-    const ch = await env.BMT_DB.prepare(`
-      SELECT * FROM servis
-      WHERE catatan LIKE '%#CHG_FOR=%' AND created_at >= ? AND created_at < ?
-    `).bind(startISO,endISO).all();
-
-    for (const c of (ch.results||[])) {
-      map[c.transaksi_id] = {
-        tanggal: c.created_at.slice(0,10),
-        transaksi_id: c.transaksi_id,
-        tipe: "charge",
-        jumlah: Number(c.biaya_servis||0)
-      };
-    }
-
-    return json({ items: Object.values(map).sort((a,b)=> b.tanggal.localeCompare(a.tanggal)) });
-  } catch(e) {
-    return json({error:String(e)},500);
-  }
-        }
 // =============================================
 // HANDLER: Tambah riwayat servis utuh
 // =============================================
@@ -1557,6 +1313,225 @@ async function riwayatServisGet(env, req){
 
   return json({ item: row || null });
 }
+// ================================
+// BONUS: HELPER
+// ================================
+async function bodyJSON(req){
+  try{
+    return await req.json();
+  }catch(e){
+    return null;
+  }
+}
+
+function nowISO(){
+  return new Date().toISOString();
+}
+
+//
+// ================================
+// BONUS: GET RIWAYAT PER USER
+// /api/bonus/riwayat?user=nama
+// ================================
+async function bonusRiwayat(env, url){
+  const user = url.searchParams.get("user") || "";
+
+  const rows = await env.BMT_DB.prepare(`
+    SELECT *
+    FROM bonus_riwayat
+    WHERE username=?
+    ORDER BY id DESC
+  `).bind(user).all();
+
+  return json({ items: rows.results || [] });
+}
+
+//
+// ================================
+// BONUS: CATAT ACHIEVED TARGET
+// /api/bonus/achieved
+// ================================
+async function bonusAchieved(env, req){
+  const b = await bodyJSON(req);
+
+  if(!b || !b.username || !b.tanggal || !b.nilai){
+    return json({ error: "username, tanggal, nilai required" }, 400);
+  }
+
+  await env.BMT_DB.prepare(`
+    INSERT INTO bonus_riwayat(username, tanggal, nilai, status, created_at)
+    VALUES(?,?,?,?,?)
+  `).bind(
+    b.username,
+    b.tanggal,
+    Number(b.nilai || 0),
+    b.status || "belum",
+    nowISO()
+  ).run();
+
+  return json({ ok: true });
+}
+
+//
+// ================================
+// BONUS: UPDATE STATUS (1x SAJA)
+// /api/bonus/status
+// ================================
+async function bonusUpdateStatus(env, req){
+  const b = await bodyJSON(req);
+
+  if(!b || !b.id || !b.status){
+    return json({ error: "id & status required" }, 400);
+  }
+
+  // update langsung → karena aturanmu: hanya boleh "belum" → "sudah"
+  await env.BMT_DB.prepare(`
+    UPDATE bonus_riwayat
+    SET status=?
+    WHERE id=?
+  `).bind(b.status, b.id).run();
+
+  return json({ ok: true });
+}
+
+// ======================================================
+// LAPORAN: BULANAN
+// ======================================================
+async function laporanBulanan(env, url) {
+  const month = url.searchParams.get("bulan") || new Date().toISOString().slice(0,7);
+
+  const start = `${month}-01T00:00:00Z`;
+  const [y, m] = month.split("-").map(Number);
+  const end = new Date(Date.UTC(y, m, 1)).toISOString();
+
+  try {
+    // PENJUALAN = stok_keluar PJL-*
+    const pen = await env.BMT_DB.prepare(`
+      SELECT IFNULL(SUM(harga * jumlah),0) AS total
+      FROM stok_keluar
+      WHERE transaksi_id LIKE 'PJL-%'
+        AND created_at >= ?
+        AND created_at < ?
+    `).bind(start, end).first();
+
+    // CHARGE = servis transaksi_id CHG-*
+    const chg = await env.BMT_DB.prepare(`
+      SELECT IFNULL(SUM(biaya_servis),0) AS total
+      FROM servis
+      WHERE transaksi_id LIKE 'CHG-%'
+        AND status != 'batal'
+        AND created_at >= ?
+        AND created_at < ?
+    `).bind(start, end).first();
+
+    // PENGELUARAN
+    const out = await env.BMT_DB.prepare(`
+      SELECT IFNULL(SUM(jumlah),0) AS total
+      FROM pengeluaran
+      WHERE created_at >= ?
+        AND created_at < ?
+    `).bind(start, end).first();
+
+    return json({
+      total_penjualan: Number(pen.total || 0),
+      total_charge: Number(chg.total || 0),
+      total_pengeluaran: Number(out.total || 0)
+    });
+
+  } catch (e) {
+    return json({ error: String(e) }, 500);
+  }
+}
+
+
+// ======================================================
+// LAPORAN: HARIAN SUMMARY (HARI INI)
+// ======================================================
+async function laporanHarianSummary(env){
+  // Cloudflare D1 pakai UTC → konversi ke lokal +8
+  // Tapi kita tetap pakai DATE(created_at) supaya aman.
+  const penjualan = await env.BMT_DB.prepare(`
+    SELECT SUM(jumlah * harga) AS total
+    FROM stok_keluar
+    WHERE DATE(created_at) = DATE('now')
+  `).first();
+
+  const pengeluaran = await env.BMT_DB.prepare(`
+    SELECT SUM(jumlah) AS total
+    FROM pengeluaran
+    WHERE DATE(created_at) = DATE('now')
+  `).first();
+
+  const totalPenjualan = Number(penjualan?.total || 0);
+  const totalPengeluaran = Number(pengeluaran?.total || 0);
+  const profit = totalPenjualan - totalPengeluaran;
+
+  return json({
+    tanggal: new Date().toISOString().slice(0,10),
+    total_penjualan: totalPenjualan,
+    total_pengeluaran: totalPengeluaran,
+    profit
+  });
+}
+
+
+// ======================================================
+// LAPORAN: RENTANG HARIAN (CHART 7 HARI / RANGE MANUAL)
+// ======================================================
+async function laporanHarianRange(env, url){
+  const start = url.searchParams.get("start");
+  const end = url.searchParams.get("end");
+
+  if(!start || !end)
+    return json({ error: "start & end required" }, 400);
+
+  // Ambil semua tanggal antara start dan end
+  const rows = await env.BMT_DB.prepare(`
+    SELECT
+      DATE(created_at) AS hari,
+      SUM(jumlah * harga) AS total_penjualan
+    FROM stok_keluar
+    WHERE DATE(created_at) BETWEEN DATE(?) AND DATE(?)
+    GROUP BY DATE(created_at)
+    ORDER BY DATE(created_at)
+  `).bind(start, end).all();
+
+  const rowsPengeluaran = await env.BMT_DB.prepare(`
+    SELECT
+      DATE(created_at) AS hari,
+      SUM(jumlah) AS total_pengeluaran
+    FROM pengeluaran
+    WHERE DATE(created_at) BETWEEN DATE(?) AND DATE(?)
+    GROUP BY DATE(created_at)
+    ORDER BY DATE(created_at)
+  `).bind(start, end).all();
+
+  // Gabungkan data kedua tabel
+  const map = {};
+
+  rows.results.forEach(r=>{
+    const d = r.hari;
+    if(!map[d]) map[d] = { tanggal:d, penjualan:0, pengeluaran:0, profit:0 };
+    map[d].penjualan = Number(r.total_penjualan || 0);
+  });
+
+  rowsPengeluaran.results.forEach(r=>{
+    const d = r.hari;
+    if(!map[d]) map[d] = { tanggal:d, penjualan:0, pengeluaran:0, profit:0 };
+    map[d].pengeluaran = Number(r.total_pengeluaran || 0);
+  });
+
+  // Hitung profit
+  Object.values(map).forEach(x=>{
+    x.profit = x.penjualan - x.pengeluaran;
+  });
+
+  // Sort ascending by date
+  const hasil = Object.values(map).sort((a,b)=>a.tanggal.localeCompare(b.tanggal));
+
+  return json({ items: hasil });
+}
+
 //////////////////////////////
 // END OF FILE
 //////////////////////////////
