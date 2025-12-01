@@ -794,48 +794,8 @@ async function servisSelesai(env, req) {
     .bind(now, id_servis)
     .run();
 
-  // === PATCH MULTI CHARGE (TIDAK MASUK STOK KELUAR) ===
-if (Array.isArray(body.charge_list)) {
-  for (const chg of body.charge_list) {
-
-    if (!chg.nama || !Number(chg.harga)) continue;
-
-    await env.BMT_DB.prepare(`
-      INSERT INTO riwayat(
-        tipe,
-        barang_id,
-        barang_nama,
-        jumlah,
-        harga,
-        harga_modal,
-        catatan,
-        keterangan,
-        dibuat_oleh,
-        created_at,
-        transaksi_id,
-        stok_lama,
-        stok_baru
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-    `).bind(
-      "charge",                // <=== TIPE BARU, BUKAN 'keluar'
-      0,                       // tidak ada barang
-      "",                      // tidak ada barang
-      1,                       // qty 1
-      Number(chg.harga),       // nilai charge
-      0,
-      chg.nama,                // nama charge dari dropdown
-      "#CHG_FOR=" + tid,       // TAG pengait servis
-      body.user || "system",
-      nowISO(),
-      tid,
-      null,
-      null
-    ).run();
-  }
-}
-  
   return json({ ok: true });
-}
+}  // ← PENUTUP YANG HILANG
 
 async function servisBatal(env, req) {
   const id_servis = Number(req.url.split("/").pop());
