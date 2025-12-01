@@ -239,7 +239,16 @@ if (path === "/api/laporan/detail" && method === "GET")
         return bonusUpdateStatus(env, request);
 
       
-  
+  // LAPORAN
+if(path === "/api/laporan/bulanan" && method === "GET")
+  return laporanBulanan(env, url);
+
+if(path === "/api/laporan/harian/summary" && method === "GET")
+  return laporanHarianSummary(env);
+
+if(path === "/api/laporan/harian" && method === "GET")
+  return laporanHarianRange(env, url);
+
       // ==========================
       // HEALTH
       // ==========================
@@ -1651,6 +1660,132 @@ async function bonusUpdateStatus(env, req){
 
   return json({ ok: true });
 }
+
+// ======================================================
+// LAPORAN: BULANAN
+// ======================================================
+async function laporanBulanan(env, url){
+  const bulan = url.searchParams.get("bulan");
+  if(!bulan) return json({ error: "Parameter bulan required" }, 400);
+
+  // Format: YYYY-MM
+  const like = bulan + "%";
+
+  // Total penjualan = SUM(jumlah * harga)
+  const penjualan = await env.BMT_DB.prepare(`
+    SELECT SUM(jumlah * harga) AS total
+    FROM stok_keluar
+    WHERE created_at LIKE ?
+  `).bind(like).first();
+
+  // Total pengeluaran
+  const pengeluaran = await env.BMT_DB.prepare(`
+    SELECT SUM(jumlah) AS total
+    FROM pengeluaran
+    WHERE created_at LIKE ?
+  `).bind(like).first();
+
+  const totalPenjualan = Number(penjualan?.total || 0);
+  const totalPengeluaran = Number(pengeluaran?.total || 0);
+  const profit = totalPenjualan - totalPengeluaran;
+
+  return json({
+    bulan,
+    total_penjualan: totalPenjualan,
+    total_pengeluaran: totalPengeluaran,
+    profit
+  });
+}
+
+
+// ======================================================
+// LAPORAN: HARIAN SUMMARY (HARI INI)
+// ======================================================
+async function laporanHarianSummary(env){
+  // Cloudflare D1 pakai UTC → konversi ke lokal +8
+  // Tapi kita tetap pakai DATE(created_at) supaya aman.
+  const penjualan = await env.BMT_DB.prepare(`
+    SELECT SUM(jumlah * harga) AS total
+    FROM stok_keluar
+    WHERE DATE(created_at) = DATE('now')
+  `).first();
+
+  const pengeluaran = await env.BMT_DB.prepare(`
+    SELECT SUM(jumlah) AS total
+    FROM pengeluaran
+    WHERE DATE(created_at) = DATE('now')
+  `).first();
+
+  const totalPenjualan = Number(penjualan?.total || 0);
+  const totalPengeluaran = Number(pengeluaran?.total || 0);
+  const profit = totalPenjualan - totalPengeluaran;
+
+  return json({
+    tanggal: new Date().toISOString().slice(0,10),
+    total_penjualan: totalPenjualan,
+    total_pengeluaran: totalPengeluaran,
+    profit
+  });
+}
+
+
+// ======================================================
+// LAPORAN: RENTANG HARIAN (CHART 7 HARI / RANGE MANUAL)
+// ======================================================
+async function laporanHarianRange(env, url){
+  const start = url.searchParams.get("start");
+  const end = url.searchParams.get("end");
+
+  if(!start || !end)
+    return json({ error: "start & end required" }, 400);
+
+  // Ambil semua tanggal antara start dan end
+  const rows = await env.BMT_DB.prepare(`
+    SELECT
+      DATE(created_at) AS hari,
+      SUM(jumlah * harga) AS total_penjualan
+    FROM stok_keluar
+    WHERE DATE(created_at) BETWEEN DATE(?) AND DATE(?)
+    GROUP BY DATE(created_at)
+    ORDER BY DATE(created_at)
+  `).bind(start, end).all();
+
+  const rowsPengeluaran = await env.BMT_DB.prepare(`
+    SELECT
+      DATE(created_at) AS hari,
+      SUM(jumlah) AS total_pengeluaran
+    FROM pengeluaran
+    WHERE DATE(created_at) BETWEEN DATE(?) AND DATE(?)
+    GROUP BY DATE(created_at)
+    ORDER BY DATE(created_at)
+  `).bind(start, end).all();
+
+  // Gabungkan data kedua tabel
+  const map = {};
+
+  rows.results.forEach(r=>{
+    const d = r.hari;
+    if(!map[d]) map[d] = { tanggal:d, penjualan:0, pengeluaran:0, profit:0 };
+    map[d].penjualan = Number(r.total_penjualan || 0);
+  });
+
+  rowsPengeluaran.results.forEach(r=>{
+    const d = r.hari;
+    if(!map[d]) map[d] = { tanggal:d, penjualan:0, pengeluaran:0, profit:0 };
+    map[d].pengeluaran = Number(r.total_pengeluaran || 0);
+  });
+
+  // Hitung profit
+  Object.values(map).forEach(x=>{
+    x.profit = x.penjualan - x.pengeluaran;
+  });
+
+  // Sort ascending by date
+  const hasil = Object.values(map).sort((a,b)=>a.tanggal.localeCompare(b.tanggal));
+
+  return json({ items: hasil });
+}
+
 //////////////////////////////
 // END OF FILE
 //////////////////////////////
