@@ -870,25 +870,112 @@ WHERE transaksi_id LIKE 'CHG-%'
 
 
 /* ------------------------------------------------------
-   2) FIX — Selesaikan Servis agar TIDAK error 400
+   2) FIX — Selesaikan Servis + TULIS KE RIWAYAT
    ------------------------------------------------------ */
 async function servisSelesai(env, req, params) {
   const id = Number(params.id);
-  const b = await bodyJSON(req) || {};   // FIX PENTING
+  const b = await bodyJSON(req) || {};
   const now = nowISO();
 
   const selesaiOleh = b.diselesaikan_oleh || "Admin";
 
-  await env.BMT_DB
-    .prepare(`
+  // Ambil data servis utama
+  const svc = await env.BMT_DB.prepare(`
+      SELECT * FROM servis WHERE id_servis=?
+  `).bind(id).first();
+
+  if (!svc) return json({ error: "servis not found" }, 404);
+
+  const core = svc.transaksi_id.replace("SRV-", "");
+
+  // Parse items servis (barang dipakai)
+  let barang = [];
+  try { barang = JSON.parse(svc.items || "[]"); } catch { barang = []; }
+
+  // ===============================
+  // 1) UPDATE status jadi selesai
+  // ===============================
+  await env.BMT_DB.prepare(`
       UPDATE servis
       SET status='selesai',
           selesai_at=?,
           diselesaikan_oleh=?
       WHERE id_servis=?
-    `)
-    .bind(now, selesaiOleh, id)
-    .run();
+  `).bind(now, selesaiOleh, id).run();
+
+  // ===============================
+  // 2) INSERT SERVIS UTAMA → RIWAYAT
+  // ===============================
+  await env.BMT_DB.prepare(`
+      INSERT INTO riwayat(
+        transaksi_id, tipe, barang_id, barang_nama,
+        jumlah, harga, catatan, dibuat_oleh, created_at
+      )
+      VALUES (?,?,?,?,?,?,?,?,?)
+  `).bind(
+      svc.transaksi_id,     // ex: SRV-xxxx
+      "servis",
+      0,
+      svc.nama_servis || "",
+      1,
+      Number(svc.biaya_servis || 0),
+      svc.catatan || "",
+      svc.dibuat_oleh || "Admin",
+      now
+  ).run();
+
+  // ===============================
+  // 3) INSERT BARANG DIPAKAI → RIWAYAT
+  // ===============================
+  for (const it of barang) {
+    await env.BMT_DB.prepare(`
+      INSERT INTO riwayat(
+        transaksi_id, tipe, barang_id, barang_nama,
+        jumlah, harga, catatan, dibuat_oleh, created_at
+      )
+      VALUES (?,?,?,?,?,?,?,?,?)
+    `).bind(
+        svc.transaksi_id,
+        "keluar",
+        it.id || it.id_barang || it.barang_id,
+        it.nama || "",
+        Number(it.qty || it.jumlah || 0),
+        Number(it.harga || 0),
+        "",
+        svc.teknisi || "Admin",
+        now
+    ).run();
+  }
+
+  // ===============================
+  // 4) INSERT CHARGE → RIWAYAT
+  // ===============================
+  const charges = await env.BMT_DB.prepare(`
+      SELECT * FROM servis
+      WHERE transaksi_id LIKE ?
+        AND transaksi_id LIKE 'CHG-%'
+        AND status != 'batal'
+  `).bind("%" + core).all();
+
+  for (const ch of charges.results) {
+    await env.BMT_DB.prepare(`
+      INSERT INTO riwayat(
+        transaksi_id, tipe, barang_id, barang_nama,
+        jumlah, harga, catatan, dibuat_oleh, created_at
+      )
+      VALUES (?,?,?,?,?,?,?,?,?)
+    `).bind(
+        svc.transaksi_id,
+        "charge",
+        0,
+        ch.nama_servis || "CHARGE",
+        1,
+        Number(ch.biaya_servis || 0),
+        ch.catatan || "",
+        ch.teknisi || "Admin",
+        now
+    ).run();
+  }
 
   return json({ ok: true });
 }
