@@ -817,17 +817,15 @@ async function servisBatal(env, req, { id }) {
   try {
     const b = await bodyJSON(req) || {};
     const alasan = b.alasan || "";
-    const user = b.dibatalkan_oleh || "Admin";
     const now = nowISO();
 
     await env.BMT_DB.prepare(`
       UPDATE servis
       SET status='batal',
-          alasan_batal=?,
-          dibatalkan_oleh=?,
+          alasan_batal=?
           batal_at=?
       WHERE id_servis=?
-    `).bind(alasan, user, now, id).run();
+    `).bind(alasan, now, id).run();
 
     const base = await env.BMT_DB.prepare(`
       SELECT transaksi_id FROM servis WHERE id_servis=?
