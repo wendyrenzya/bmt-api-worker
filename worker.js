@@ -829,7 +829,7 @@ async function servisBatal(env, req, { id }) {
     WHERE id_servis=?
   `).bind(alasan, user, now, id).run();
 
-  // 2) Dapatkan transaksi_id SRV-xxxx untuk mencari CHG-xxxx
+  // 2) Ambil transaksi_id asli
   const base = await env.BMT_DB.prepare(`
     SELECT transaksi_id FROM servis WHERE id_servis=?
   `).bind(id).first();
@@ -840,7 +840,7 @@ async function servisBatal(env, req, { id }) {
 
   const core = base.transaksi_id.replace("SRV-", "");
 
-  // 3) Ambil semua charge yg masih AKTIF saja
+  // 3) Ambil semua charge aktif (CHG-xxxx)
   const charges = await env.BMT_DB.prepare(`
     SELECT id_servis FROM servis
     WHERE transaksi_id LIKE 'CHG-%'
@@ -848,13 +848,12 @@ async function servisBatal(env, req, { id }) {
       AND status='ongoing'
   `).bind('%' + core).all();
 
-  // 4) Batalkan charge satu per satu, aman jika charge sudah tidak ada
+  // 4) Loop aman — TIDAK error jika undefined
   const listCharges = charges?.results || [];
-for (const ch of listCharges) {
-    try { await servisBatalCharge(env, ch.id_servis); } catch(e){}
-}
-      // jangan hentikan proses
-    }
+  for (const ch of listCharges) {
+    try {
+      await servisBatalCharge(env, ch.id_servis);
+    } catch (e) {}
   }
 
   return json({ ok: true });
