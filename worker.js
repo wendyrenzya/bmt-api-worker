@@ -849,10 +849,10 @@ async function servisBatal(env, req, { id }) {
   `).bind('%' + core).all();
 
   // 4) Batalkan charge satu per satu, aman jika charge sudah tidak ada
-  for (const ch of charges.results) {
-    try {
-      await servisBatalCharge(env, ch.id_servis);
-    } catch (e) {
+  const listCharges = charges?.results || [];
+for (const ch of listCharges) {
+    try { await servisBatalCharge(env, ch.id_servis); } catch(e){}
+}
       // jangan hentikan proses
     }
   }
