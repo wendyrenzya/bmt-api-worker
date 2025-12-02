@@ -814,11 +814,12 @@ async function servisDetail(env, req) {
    1) FIX — Tambahkan endpoint BATAL SERVIS
    ----------------------------------------- */
 async function servisBatal(env, req, { id }) {
-  const b = await bodyJSON(req);
-  const alasan = b?.alasan || "";
-  const user = b?.dibatalkan_oleh || "Admin";
+  const b = await bodyJSON(req) || {};
+  const alasan = b.alasan || "";
+  const user = b.dibatalkan_oleh || "Admin";
   const now = nowISO();
 
+  // 1) Batalkan servis utama
   await env.BMT_DB.prepare(`
     UPDATE servis
     SET status='batal',
@@ -827,6 +828,34 @@ async function servisBatal(env, req, { id }) {
         batal_at=?
     WHERE id_servis=?
   `).bind(alasan, user, now, id).run();
+
+  // 2) Dapatkan transaksi_id SRV-xxxx untuk mencari CHG-xxxx
+  const base = await env.BMT_DB.prepare(`
+    SELECT transaksi_id FROM servis WHERE id_servis=?
+  `).bind(id).first();
+
+  if (!base || !base.transaksi_id) {
+    return json({ ok: true });
+  }
+
+  const core = base.transaksi_id.replace("SRV-", "");
+
+  // 3) Ambil semua charge yg masih AKTIF saja
+  const charges = await env.BMT_DB.prepare(`
+    SELECT id_servis FROM servis
+    WHERE transaksi_id LIKE 'CHG-%'
+      AND transaksi_id LIKE ?
+      AND status='ongoing'
+  `).bind('%' + core).all();
+
+  // 4) Batalkan charge satu per satu, aman jika charge sudah tidak ada
+  for (const ch of charges.results) {
+    try {
+      await servisBatalCharge(env, ch.id_servis);
+    } catch (e) {
+      // jangan hentikan proses
+    }
+  }
 
   return json({ ok: true });
 }
@@ -866,8 +895,10 @@ async function servisBatalCharge(env, id_servis) {
     SELECT transaksi_id FROM servis WHERE id_servis=?
   `).bind(id_servis).first();
 
-  if (!row)
-    return json({ error: "charge not found" }, 404);
+ // Jika charge tidak ditemukan (mungkin sudah batal) → anggap sukses
+if (!row) {
+  return json({ ok: true });
+}
 
   const tid = row.transaksi_id;
 
