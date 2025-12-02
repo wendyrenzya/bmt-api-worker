@@ -837,17 +837,21 @@ async function servisBatal(env, req, { id }) {
    ------------------------------------------------------ */
 async function servisSelesai(env, req, params) {
   const id = Number(params.id);
-  const b = await bodyJSON(req) || {};   // ← FIX: aman walau body kosong
+  const b = await bodyJSON(req) || {};   // FIX PENTING
   const now = nowISO();
+
   const selesaiOleh = b.diselesaikan_oleh || "Admin";
 
-  await env.BMT_DB.prepare(`
-    UPDATE servis
-    SET status='selesai',
-        selesai_at=?,
-        diselesaikan_oleh=?
-    WHERE id_servis=?
-  `).bind(now, selesaiOleh, id).run();
+  await env.BMT_DB
+    .prepare(`
+      UPDATE servis
+      SET status='selesai',
+          selesai_at=?,
+          diselesaikan_oleh=?
+      WHERE id_servis=?
+    `)
+    .bind(now, selesaiOleh, id)
+    .run();
 
   return json({ ok: true });
 }
