@@ -904,15 +904,15 @@ async function servisBatalCharge(env, id_servis) {
   }
 
   // Perbarui status charge menjadi batal
-  await env.BMT_DB.prepare(`
-    UPDATE servis
-    SET status='batal',
-        batal_at=?
-    WHERE id_servis=?
-  `).bind(nowISO(), id_servis).run();
+  const q = `
+UPDATE servis
+SET status='batal',
+    alasan_batal=?,
+    batal_at=?
+WHERE id_servis=?
+`;
 
-  // **TIDAK ADA PENULISAN KE RIWAYAT LAGI**
-  return json({ ok: true });
+return json({ debug_sql: q }, 500);   // <- kirim SQL apa adanya
 }
 
 async function servisUpdateBiaya(env, req) {
