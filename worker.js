@@ -806,33 +806,84 @@ async function servisDetail(env, req) {
   return json({ item: row });
 }
 
-async function servisBatalCharge(env, id_servis){
+/* ========================================================================
+   PATCH SERVIS FINAL — batal • selesai • batal charge (perbaikan total)
+   ======================================================================== */
+
+/* -----------------------------------------
+   1) FIX — Tambahkan endpoint BATAL SERVIS
+   ----------------------------------------- */
+async function servisBatal(env, req, { id }) {
+  const b = await bodyJSON(req);
+  const alasan = b?.alasan || "";
+  const user = b?.dibatalkan_oleh || "Admin";
+  const now = nowISO();
+
+  await env.BMT_DB.prepare(`
+    UPDATE servis
+    SET status='batal',
+        alasan_batal=?,
+        dibatalkan_oleh=?,
+        batal_at=?
+    WHERE id_servis=?
+  `).bind(alasan, user, now, id).run();
+
+  return json({ ok: true });
+}
+
+
+/* ------------------------------------------------------
+   2) FIX — Selesaikan Servis agar TIDAK error 400
+   ------------------------------------------------------ */
+async function servisSelesai(env, req, params) {
+  const id = Number(params.id);
+  const b = await bodyJSON(req) || {};   // ← FIX: aman walau body kosong
+  const now = nowISO();
+  const selesaiOleh = b.diselesaikan_oleh || "Admin";
+
+  await env.BMT_DB.prepare(`
+    UPDATE servis
+    SET status='selesai',
+        selesai_at=?,
+        diselesaikan_oleh=?
+    WHERE id_servis=?
+  `).bind(now, selesaiOleh, id).run();
+
+  return json({ ok: true });
+}
+
+
+/* -------------------------------------------------------------------
+   3) FIX BESAR — batal charge → benar-benar tidak muncul di detail
+   ------------------------------------------------------------------- */
+async function servisBatalCharge(env, id_servis) {
+  // Ambil transaksi_id CHG-....
+  const row = await env.BMT_DB.prepare(`
+    SELECT transaksi_id FROM servis WHERE id_servis=?
+  `).bind(id_servis).first();
+
+  if (!row)
+    return json({ error: "charge not found" }, 404);
+
+  const tid = row.transaksi_id;
+
+  // 1) Set CHG sebagai batal
   await env.BMT_DB.prepare(`
     UPDATE servis
     SET status='batal'
     WHERE id_servis=?
   `).bind(id_servis).run();
 
-  return json({ ok:true });
-}
-
-async function servisSelesai(env, req, params) {
-  const id = Number(params.id);
-  const b = await bodyJSON(req);
-  const now = nowISO();
-
-  const selesaiOleh = b.diselesaikan_oleh || "Admin";
-
-  await env.BMT_DB
-    .prepare(`
-      UPDATE servis
-      SET status='selesai',
-          selesai_at=?,
-          diselesaikan_oleh=?
-      WHERE id_servis=?
-    `)
-    .bind(now, selesaiOleh, id)
-    .run();
+  // 2) Bersihkan CHG dari riwayat — rename tag
+  //    "#CHG_FOR=x" → "#CHG_CANCELLED_FOR=x"
+  await env.BMT_DB.prepare(`
+    UPDATE riwayat
+    SET keterangan = REPLACE(keterangan, '#CHG_FOR=', '#CHG_CANCELLED_FOR=')
+    WHERE transaksi_id=? OR keterangan LIKE ?
+  `).bind(
+    tid,
+    `%#CHG_FOR=${tid}%`
+  ).run();
 
   return json({ ok: true });
 }
