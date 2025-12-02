@@ -907,7 +907,7 @@ async function servisBatalCharge(env, id_servis) {
   await env.BMT_DB.prepare(`
     UPDATE servis
     SET status='batal',
-        batal_at=?
+        batal_at=?,
     WHERE id_servis=?
   `).bind(nowISO(), id_servis).run();
 
