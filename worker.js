@@ -910,9 +910,9 @@ SET status='batal',
     alasan_batal=?,
     batal_at=?
 WHERE id_servis=?
-`;
+;
 
-return json({ debug_sql: q }, 500);   // <- kirim SQL apa adanya
+return json({ debug_sql: q }, 200);   // <- kirim SQL apa adanya
 }
 
 async function servisUpdateBiaya(env, req) {
