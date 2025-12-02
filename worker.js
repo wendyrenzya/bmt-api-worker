@@ -890,36 +890,32 @@ async function servisSelesai(env, req, params) {
    3) FIX BESAR — batal charge → benar-benar tidak muncul di detail
    ------------------------------------------------------------------- */
 async function servisBatalCharge(env, id_servis) {
-  // Ambil transaksi_id CHG-....
+  // Ambil transaksi CHG
   const row = await env.BMT_DB.prepare(`
-    SELECT transaksi_id FROM servis WHERE id_servis=?
+    SELECT transaksi_id, status
+    FROM servis
+    WHERE id_servis=?
   `).bind(id_servis).first();
 
- // Jika charge tidak ditemukan (mungkin sudah batal) → anggap sukses
-if (!row) {
-  return json({ ok: true });
-}
+  // Jika charge tidak ditemukan → anggap selesai
+  if (!row) {
+    return json({ ok: true });
+  }
 
-  const tid = row.transaksi_id;
+  // Jika charge sudah batal → tidak perlu dibatalkan ulang
+  if (row.status === "batal") {
+    return json({ ok: true });
+  }
 
-  // 1) Set CHG sebagai batal
+  // Perbarui status charge menjadi batal
   await env.BMT_DB.prepare(`
     UPDATE servis
-    SET status='batal'
+    SET status='batal',
+        batal_at=?
     WHERE id_servis=?
-  `).bind(id_servis).run();
+  `).bind(nowISO(), id_servis).run();
 
-  // 2) Bersihkan CHG dari riwayat — rename tag
-  //    "#CHG_FOR=x" → "#CHG_CANCELLED_FOR=x"
-  await env.BMT_DB.prepare(`
-    UPDATE riwayat
-    SET keterangan = REPLACE(keterangan, '#CHG_FOR=', '#CHG_CANCELLED_FOR=')
-    WHERE transaksi_id=? OR keterangan LIKE ?
-  `).bind(
-    tid,
-    `%#CHG_FOR=${tid}%`
-  ).run();
-
+  // **TIDAK ADA PENULISAN KE RIWAYAT LAGI**
   return json({ ok: true });
 }
 
