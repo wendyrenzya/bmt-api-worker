@@ -814,49 +814,48 @@ async function servisDetail(env, req) {
    1) FIX — Tambahkan endpoint BATAL SERVIS
    ----------------------------------------- */
 async function servisBatal(env, req, { id }) {
-  const b = await bodyJSON(req) || {};
-  const alasan = b.alasan || "";
-  const user = b.dibatalkan_oleh || "Admin";
-  const now = nowISO();
+  try {
+    const b = await bodyJSON(req) || {};
+    const alasan = b.alasan || "";
+    const user = b.dibatalkan_oleh || "Admin";
+    const now = nowISO();
 
-  // 1) Batalkan servis utama
-  await env.BMT_DB.prepare(`
-    UPDATE servis
-    SET status='batal',
-        alasan_batal=?,
-        dibatalkan_oleh=?,
-        batal_at=?
-    WHERE id_servis=?
-  `).bind(alasan, user, now, id).run();
+    await env.BMT_DB.prepare(`
+      UPDATE servis
+      SET status='batal',
+          alasan_batal=?,
+          dibatalkan_oleh=?,
+          batal_at=?
+      WHERE id_servis=?
+    `).bind(alasan, user, now, id).run();
 
-  // 2) Ambil transaksi_id asli
-  const base = await env.BMT_DB.prepare(`
-    SELECT transaksi_id FROM servis WHERE id_servis=?
-  `).bind(id).first();
+    const base = await env.BMT_DB.prepare(`
+      SELECT transaksi_id FROM servis WHERE id_servis=?
+    `).bind(id).first();
 
-  if (!base || !base.transaksi_id) {
+    if (!base || !base.transaksi_id) {
+      return json({ ok: true });
+    }
+
+    const core = base.transaksi_id.substring(4);
+
+    const charges = await env.BMT_DB.prepare(`
+      SELECT id_servis FROM servis
+      WHERE transaksi_id LIKE 'CHG-%'
+        AND transaksi_id LIKE ?
+        AND status='ongoing'
+    `).bind('%' + core).all();
+
+    const list = charges?.results || [];
+    for (const ch of list) {
+      try { await servisBatalCharge(env, ch.id_servis); } catch(e){}
+    }
+
     return json({ ok: true });
+
+  } catch (err) {
+    return json({ debug: "ERROR SERVIS BATAL", message: String(err) }, 500);
   }
-
-  const core = base.transaksi_id.replace("SRV-", "");
-
-  // 3) Ambil semua charge aktif (CHG-xxxx)
-  const charges = await env.BMT_DB.prepare(`
-    SELECT id_servis FROM servis
-    WHERE transaksi_id LIKE 'CHG-%'
-      AND transaksi_id LIKE ?
-      AND status='ongoing'
-  `).bind('%' + core).all();
-
-  // 4) Loop aman — TIDAK error jika undefined
-  const listCharges = charges?.results || [];
-  for (const ch of listCharges) {
-    try {
-      await servisBatalCharge(env, ch.id_servis);
-    } catch (e) {}
-  }
-
-  return json({ ok: true });
 }
 
 
