@@ -318,71 +318,65 @@ function makeTID() {
   return `${ts}-${rnd}`;
 }
 
-///////////////////////////
-// BONUS / PROGRESS LOGIC
-///////////////////////////
+
+//////////////////////////////
+// BONUS / PROGRESS LOGIC (FINAL PATCH)
+//////////////////////////////
 
 /**
- * bonusCalculate(env, user)
- * - user: username string (e.g. "nando", "firamitha")
- * - rule:
- *   - if user's role === 'admin' -> calculate total toko (no dibuat_oleh filter)
- *   - else (mekanik) -> calculate hanya dibuat_oleh = user
- *
- * Returns:
- * {
- *  user, total, target, percent, periode_mulai
- * }
- *
- * Also: if percent >= 100 -> insert into bonus_riwayat (but avoid duplicate same-date entry)
+ * bonusCalculate(env, user, write = true)
+ * - write = true  → dipanggil dari stok_keluar, boleh INSERT achieved & update progress
+ * - write = false → dipanggil dari endpoint progress, TIDAK BOLEH insert atau menulis apa pun
  */
-async function bonusCalculate(env, user) {
+async function bonusCalculate(env, user, write = true) {
   if (!user) return { error: "user required" };
 
-  // 1) get last achieved date for this user
+  // --- 1. Ambil achieved terakhir (untuk periode_mulai) ---
   const last = await env.BMT_DB.prepare(`
-    SELECT tanggal
-    FROM bonus_riwayat
-    WHERE username=?
-    ORDER BY id DESC
-    LIMIT 1
+      SELECT tanggal
+      FROM bonus_riwayat
+      WHERE username=?
+      ORDER BY id DESC
+      LIMIT 1
   `).bind(user).first();
 
   let periode_mulai = "2000-01-01";
-  if (last && last.tanggal) {
-    try {
-      const d = new Date(last.tanggal);
-      d.setDate(d.getDate() + 1);
-      periode_mulai = d.toISOString().slice(0,10);
-    } catch (e) {
-      periode_mulai = "2000-01-01";
-    }
+  if (last?.tanggal) {
+    const d = new Date(last.tanggal);
+    d.setDate(d.getDate() + 1);
+    periode_mulai = d.toISOString().slice(0, 10);
   }
 
-  // 2) determine role & target
+  // --- 2. Ambil role ---
   const roleRow = await env.BMT_DB.prepare(`
-    SELECT role FROM users WHERE username=? LIMIT 1
+      SELECT role FROM users WHERE username=? LIMIT 1
   `).bind(user).first();
 
-  const role = (roleRow && roleRow.role) ? roleRow.role : "mekanik";
-  let target = 1000000;
-  if (role === "admin") target = 2000000;
-  if (role === "owner") target = 0;
+  const role = roleRow?.role || "mekanik";
 
-  // 3) calculate total according to role
+  // owner → selalu skip
+  if (role === "owner") {
+    return {
+      user, total: 0, target: 0, percent: 0,
+      periode_mulai: "N/A", role
+    };
+  }
+
+  const target = role === "admin" ? 2000000 : 1000000;
+
+  // --- 3. Hitung total ---
   let rows;
   if (role === "admin") {
     rows = await env.BMT_DB.prepare(`
-      SELECT IFNULL(SUM(jumlah * harga),0) AS total
+      SELECT IFNULL(SUM(jumlah * harga), 0) AS total
       FROM stok_keluar
       WHERE DATE(created_at) >= DATE(?)
     `).bind(periode_mulai).first();
   } else {
-    // mekanik or others (personal)
     rows = await env.BMT_DB.prepare(`
-      SELECT IFNULL(SUM(jumlah * harga),0) AS total
+      SELECT IFNULL(SUM(jumlah * harga), 0) AS total
       FROM stok_keluar
-      WHERE dibuat_oleh = ?
+      WHERE dibuat_oleh=?
         AND DATE(created_at) >= DATE(?)
     `).bind(user, periode_mulai).first();
   }
@@ -390,19 +384,20 @@ async function bonusCalculate(env, user) {
   const total = Number(rows?.total || 0);
   const percent = target > 0 ? Math.min(100, Math.floor((total / target) * 100)) : 0;
 
-  // 4) if reached target -> insert achieved (but ensure not duplicate for today)
-  if (target > 0 && percent >= 100) {
-    const today = new Date().toISOString().slice(0,10);
+  // --- 4. Jika menuju 100% tetapi write=false → TIDAK BOLEH INSERT ---
+  if (write && target > 0 && percent >= 100) {
+    const today = new Date().toISOString().slice(0, 10);
 
-    // Check if there's already an achieved for this user today (avoid duplicates)
     const exists = await env.BMT_DB.prepare(`
-      SELECT id FROM bonus_riwayat WHERE username=? AND tanggal=? LIMIT 1
+        SELECT id FROM bonus_riwayat
+        WHERE username=? AND tanggal=?
+        LIMIT 1
     `).bind(user, today).first();
 
     if (!exists) {
       await env.BMT_DB.prepare(`
-        INSERT INTO bonus_riwayat(username, tanggal, nilai, status, created_at)
-        VALUES(?,?,?,?,?)
+          INSERT INTO bonus_riwayat(username, tanggal, nilai, status, created_at)
+          VALUES (?, ?, ?, ?, ?)
       `).bind(
         user,
         today,
@@ -425,14 +420,15 @@ async function bonusCalculate(env, user) {
 
 /**
  * Endpoint: GET /api/bonus/progress?user=nama
- * Calls bonusCalculate and returns the result (and may insert achieved if >=100)
+ * FIX: Tidak boleh menulis DB. HANYA READ.
  */
 async function bonusProgress(env, url) {
-  const user = url.searchParams.get("user") || "";
+  const user = url.searchParams.get("user");
   if (!user) return json({ error: "user required" }, 400);
 
-  const res = await bonusCalculate(env, user);
-  return json(res);
+  // read-only calculation (NO INSERT)
+  const result = await bonusCalculate(env, user, false);
+  return json(result);
 }
 
 //////////////////
