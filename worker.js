@@ -426,11 +426,26 @@ async function bonusProgress(env, url) {
   const user = url.searchParams.get("user");
   if (!user) return json({ error: "user required" }, 400);
 
-  // read-only calculation (NO INSERT)
+  // Ambil role user
+  const roleRow = await env.BMT_DB.prepare(`
+      SELECT role FROM users WHERE username=? LIMIT 1
+  `).bind(user).first();
+
+  const role = roleRow?.role || "mekanik";
+
+  // === FIX: OWNER TIDAK BOLEH TAMPIL ===
+  if (role === "owner") {
+    return json({
+      user,
+      hidden: true,
+      reason: "owner_no_bonus"
+    });
+  }
+
+  // read-only calculation
   const result = await bonusCalculate(env, user, false);
   return json(result);
 }
-
 //////////////////
 ////// ABSEN 
 ////////////////
@@ -770,7 +785,30 @@ await env.BMT_DB.prepare(
   tid
 ).run();
   }
+// === TRIGGER PERHITUNGAN BONUS ===
 
+if (operator && operator !== "owner") {
+
+    // Hitung progress mekanik jika operator adalah mekanik
+    const opRole = await env.BMT_DB.prepare(`
+        SELECT role FROM users WHERE username=? LIMIT 1
+    `).bind(operator).first();
+
+    if (opRole && opRole.role === "mekanik") {
+        await bonusCalculate(env, operator, true);
+    }
+
+    // Hitung semua admin (admin = total toko)
+    const admins = await env.BMT_DB.prepare(`
+        SELECT username FROM users WHERE role='admin'
+    `).all();
+
+    for (const a of (admins.results || [])) {
+        if (a && a.username) {
+            await bonusCalculate(env, a.username, true);
+        }
+    }
+}
   // AFTER all stok_keluar operations are done, trigger bonus recalculations:
   try {
     // 1) calculate for the operator (if not owner/skip)
