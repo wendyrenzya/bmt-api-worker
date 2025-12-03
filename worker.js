@@ -318,6 +318,30 @@ function makeTID() {
   return `${ts}-${rnd}`;
 }
 
+// === BONUS STATUS CACHE ===
+async function saveBonusStatus(env, data) {
+  await env.BMT_DB.prepare(`
+    INSERT OR REPLACE INTO bonus_status
+    (username,total,target,percent,periode_mulai,role,updated_at)
+    VALUES(?,?,?,?,?,?,?)
+  `).bind(
+    data.user,
+    data.total,
+    data.target,
+    data.percent,
+    data.periode_mulai,
+    data.role,
+    nowISO()
+  ).run();
+}
+
+async function getBonusStatus(env, user) {
+  return await env.BMT_DB.prepare(`
+    SELECT username AS user,total,target,percent,periode_mulai,role,updated_at
+    FROM bonus_status
+    WHERE username=? LIMIT 1
+  `).bind(user).first();
+}
 
 //////////////////////////////
 // BONUS / PROGRESS LOGIC (FINAL PATCH)
@@ -407,7 +431,16 @@ async function bonusCalculate(env, user, write = true) {
       ).run();
     }
   }
-
+if (write) {
+  await saveBonusStatus(env, {
+    user,
+    total,
+    target,
+    percent,
+    periode_mulai,
+    role
+  });
+}
   return {
     user,
     total,
@@ -785,6 +818,7 @@ await env.BMT_DB.prepare(
   tid
 ).run();
   }
+
 // === TRIGGER PERHITUNGAN BONUS ===
 
 if (operator && operator !== "owner") {
@@ -809,22 +843,6 @@ if (operator && operator !== "owner") {
         }
     }
 }
-  // AFTER all stok_keluar operations are done, trigger bonus recalculations:
-  try {
-    // 1) calculate for the operator (if not owner/skip)
-    await bonusCalculate(env, operator);
-
-    // 2) calculate for all admins (so admin progress always reflects total toko)
-    const admins = await env.BMT_DB.prepare(`SELECT username FROM users WHERE role='admin'`).all();
-    for (const a of (admins.results || [])) {
-      if (a && a.username) {
-        await bonusCalculate(env, a.username);
-      }
-    }
-  } catch (e) {
-    // non-fatal: just log in response if needed. We still return ok.
-    // avoid throwing to not break caller.
-  }
 
   return json({ ok: true, transaksi_id: tid });
 }
