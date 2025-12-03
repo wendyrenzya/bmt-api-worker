@@ -10,8 +10,8 @@ export default {
     try {
     
     // ==========================
-// ABSENSI
-// ==========================
+    // ABSENSI
+    // ==========================
 if (path === "/api/absensi" && method === "POST")
   return absensiAdd(env, request);
 
@@ -111,8 +111,8 @@ if (path.startsWith("/api/servis/charge/batal/") && method === "PUT") {
         return servisDetail(env, request);
 
       // =============================================
-// RIWAYAT SERVIS (BARU)
-// =============================================
+ // RIWAYAT SERVIS (BARU)
+ // =============================================
 if (path === "/api/riwayat_servis" && method === "POST")
   return riwayatServisAdd(env, request);
 
@@ -249,6 +249,10 @@ if (path === "/api/laporan/detail" && method === "GET")
       if (path === "/api/bonus/status" && method === "POST")
         return bonusUpdateStatus(env, request);
 
+      // NEW: progress endpoint
+      if (path === "/api/bonus/progress" && method === "GET")
+        return bonusProgress(env, url);
+
  // =====================================
 // CUSTOM MESSAGE ROUTES
 // =====================================
@@ -313,6 +317,124 @@ function makeTID() {
   const rnd = Math.random().toString(16).slice(2, 7).toUpperCase();
   return `${ts}-${rnd}`;
 }
+
+///////////////////////////
+// BONUS / PROGRESS LOGIC
+///////////////////////////
+
+/**
+ * bonusCalculate(env, user)
+ * - user: username string (e.g. "nando", "firamitha")
+ * - rule:
+ *   - if user's role === 'admin' -> calculate total toko (no dibuat_oleh filter)
+ *   - else (mekanik) -> calculate hanya dibuat_oleh = user
+ *
+ * Returns:
+ * {
+ *  user, total, target, percent, periode_mulai
+ * }
+ *
+ * Also: if percent >= 100 -> insert into bonus_riwayat (but avoid duplicate same-date entry)
+ */
+async function bonusCalculate(env, user) {
+  if (!user) return { error: "user required" };
+
+  // 1) get last achieved date for this user
+  const last = await env.BMT_DB.prepare(`
+    SELECT tanggal
+    FROM bonus_riwayat
+    WHERE username=?
+    ORDER BY id DESC
+    LIMIT 1
+  `).bind(user).first();
+
+  let periode_mulai = "2000-01-01";
+  if (last && last.tanggal) {
+    try {
+      const d = new Date(last.tanggal);
+      d.setDate(d.getDate() + 1);
+      periode_mulai = d.toISOString().slice(0,10);
+    } catch (e) {
+      periode_mulai = "2000-01-01";
+    }
+  }
+
+  // 2) determine role & target
+  const roleRow = await env.BMT_DB.prepare(`
+    SELECT role FROM users WHERE username=? LIMIT 1
+  `).bind(user).first();
+
+  const role = (roleRow && roleRow.role) ? roleRow.role : "mekanik";
+  let target = 1000000;
+  if (role === "admin") target = 2000000;
+  if (role === "owner") target = 0;
+
+  // 3) calculate total according to role
+  let rows;
+  if (role === "admin") {
+    rows = await env.BMT_DB.prepare(`
+      SELECT IFNULL(SUM(jumlah * harga),0) AS total
+      FROM stok_keluar
+      WHERE DATE(created_at) >= DATE(?)
+    `).bind(periode_mulai).first();
+  } else {
+    // mekanik or others (personal)
+    rows = await env.BMT_DB.prepare(`
+      SELECT IFNULL(SUM(jumlah * harga),0) AS total
+      FROM stok_keluar
+      WHERE dibuat_oleh = ?
+        AND DATE(created_at) >= DATE(?)
+    `).bind(user, periode_mulai).first();
+  }
+
+  const total = Number(rows?.total || 0);
+  const percent = target > 0 ? Math.min(100, Math.floor((total / target) * 100)) : 0;
+
+  // 4) if reached target -> insert achieved (but ensure not duplicate for today)
+  if (target > 0 && percent >= 100) {
+    const today = new Date().toISOString().slice(0,10);
+
+    // Check if there's already an achieved for this user today (avoid duplicates)
+    const exists = await env.BMT_DB.prepare(`
+      SELECT id FROM bonus_riwayat WHERE username=? AND tanggal=? LIMIT 1
+    `).bind(user, today).first();
+
+    if (!exists) {
+      await env.BMT_DB.prepare(`
+        INSERT INTO bonus_riwayat(username, tanggal, nilai, status, created_at)
+        VALUES(?,?,?,?,?)
+      `).bind(
+        user,
+        today,
+        50000,
+        "belum",
+        nowISO()
+      ).run();
+    }
+  }
+
+  return {
+    user,
+    total,
+    target,
+    percent,
+    periode_mulai,
+    role
+  };
+}
+
+/**
+ * Endpoint: GET /api/bonus/progress?user=nama
+ * Calls bonusCalculate and returns the result (and may insert achieved if >=100)
+ */
+async function bonusProgress(env, url) {
+  const user = url.searchParams.get("user") || "";
+  if (!user) return json({ error: "user required" }, 400);
+
+  const res = await bonusCalculate(env, user);
+  return json(res);
+}
+
 //////////////////
 ////// ABSEN 
 ////////////////
@@ -651,6 +773,23 @@ await env.BMT_DB.prepare(
   now,
   tid
 ).run();
+  }
+
+  // AFTER all stok_keluar operations are done, trigger bonus recalculations:
+  try {
+    // 1) calculate for the operator (if not owner/skip)
+    await bonusCalculate(env, operator);
+
+    // 2) calculate for all admins (so admin progress always reflects total toko)
+    const admins = await env.BMT_DB.prepare(`SELECT username FROM users WHERE role='admin'`).all();
+    for (const a of (admins.results || [])) {
+      if (a && a.username) {
+        await bonusCalculate(env, a.username);
+      }
+    }
+  } catch (e) {
+    // non-fatal: just log in response if needed. We still return ok.
+    // avoid throwing to not break caller.
   }
 
   return json({ ok: true, transaksi_id: tid });
