@@ -1888,7 +1888,27 @@ async function laporanHarianRange(env, url){
 
   // Sort ascending by date
   const hasil = Object.values(map).sort((a,b)=>a.tanggal.localeCompare(b.tanggal));
+// PATCH: Tambah pengeluaran_list & filter kategori (case-insensitive)
+for (const x of hasil) {
+  const list = await env.BMT_DB.prepare(`
+    SELECT nama, kategori, jumlah, catatan, dibuat_oleh, created_at
+    FROM pengeluaran
+    WHERE DATE(created_at) = DATE(?)
+    ORDER BY created_at ASC
+  `).bind(x.tanggal).all();
 
+  const pengeluaranList = list.results || [];
+
+  const filtered = pengeluaranList.filter(p => {
+    const k = String(p.kategori || "").toLowerCase();
+    return k === "operasional" || k === "lain-lain";
+  });
+
+  const totalFiltered = filtered.reduce((t, p) => t + Number(p.jumlah || 0), 0);
+
+  x.pengeluaran_list = pengeluaranList;
+  x.pengeluaran_operasional_lain = totalFiltered;
+}
   return json({ items: hasil });
 }
 
