@@ -1243,6 +1243,25 @@ async function servisUpdateAlasan(env, req) {
 
   return json({ ok: true });
 }
+
+async function servisUpdateBiaya(env, req) {
+  const id = Number(req.url.split("/").pop());
+  const b = await bodyJSON(req);
+
+  if (!b || typeof b.biaya_servis === "undefined")
+    return json({ error: "biaya_servis required" }, 400);
+
+  await env.BMT_DB.prepare(`
+    UPDATE servis
+    SET biaya_servis = ?
+    WHERE id_servis = ?
+  `).bind(
+    Number(b.biaya_servis || 0),
+    id
+  ).run();
+
+  return json({ ok: true });
+}
 //////////////////////////////
 // RIWAYAT
 //////////////////////////////
