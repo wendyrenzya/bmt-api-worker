@@ -713,6 +713,13 @@ async function stokMasuk(env, req) {
       .run();
 
 // PATCH RIWAYAT — STOK MASUK (KOMPATIBEL)
+const rowBarang = await env.BMT_DB
+  .prepare(`SELECT nama FROM barang WHERE id=?`)
+  .bind(it.id)
+  .first();
+
+const namaBarang = rowBarang?.nama || "";
+
 await env.BMT_DB.prepare(
   `INSERT INTO riwayat(
     tipe,
@@ -729,7 +736,7 @@ await env.BMT_DB.prepare(
 ).bind(
   "masuk",
   it.id,
-  it.nama || "",
+  namaBarang,
   it.jumlah,
   0,
   0,
@@ -792,6 +799,13 @@ async function stokKeluar(env, req) {
       .run();
     
 // PATCH RIWAYAT — STOK KELUAR (KOMPATIBEL)
+const rowBarang = await env.BMT_DB
+  .prepare(`SELECT nama FROM barang WHERE id=?`)
+  .bind(it.id)
+  .first();
+
+const namaBarang = rowBarang?.nama || "";
+
 await env.BMT_DB.prepare(
   `INSERT INTO riwayat(
     tipe,
@@ -808,48 +822,21 @@ await env.BMT_DB.prepare(
 ).bind(
   "keluar",
   it.id,
-  it.nama || "",           // ← WAJIB ADA, STRING KOSONG AMAN
+  namaBarang,
   it.jumlah || it.qty || 0,
   it.harga || 0,
-  0,                       // harga_modal
-  it.keterangan || "",     // catatan, kolom WAJIB DIISI
+  0,
+  it.keterangan || "",
   operator,
   now,
   tid
 ).run();
   }
 
-// === TRIGGER PERHITUNGAN BONUS ===
-
-if (operator && operator !== "owner") {
-
-    // Hitung progress mekanik jika operator adalah mekanik
-    const opRole = await env.BMT_DB.prepare(`
-        SELECT role FROM users WHERE username=? LIMIT 1
-    `).bind(operator).first();
-
-    if (opRole && opRole.role === "mekanik") {
-        await bonusCalculate(env, operator, true);
-    }
-
-    // Hitung semua admin (admin = total toko)
-    const admins = await env.BMT_DB.prepare(`
-        SELECT username FROM users WHERE role='admin'
-    `).all();
-
-    for (const a of (admins.results || [])) {
-        if (a && a.username) {
-            await bonusCalculate(env, a.username, true);
-        }
-    }
-}
 
   return json({ ok: true, transaksi_id: tid });
 }
 
-//////////////////////////////
-// STOK AUDIT
-//////////////////////////////
 
 //////////////////////////////
 // STOK AUDIT (FORMAT BARU ONLY)
@@ -1119,24 +1106,35 @@ async function servisSelesai(env, req, params) {
   // 3) INSERT BARANG DIPAKAI → RIWAYAT
   // ===============================
   for (const it of barang) {
-    await env.BMT_DB.prepare(`
-      INSERT INTO riwayat(
-        transaksi_id, tipe, barang_id, barang_nama,
-        jumlah, harga, catatan, dibuat_oleh, created_at
-      )
-      VALUES (?,?,?,?,?,?,?,?,?)
-    `).bind(
-        svc.transaksi_id,
-        "keluar",
-        it.id || it.id_barang || it.barang_id,
-        it.nama || "",
-        Number(it.qty || it.jumlah || 0),
-        Number(it.harga || 0),
-        "",
-        svc.teknisi || "Admin",
-        now
-    ).run();
+  let namaBarang = it.nama || "";
+
+  if (!namaBarang) {
+    const rowBarang = await env.BMT_DB
+      .prepare(`SELECT nama FROM barang WHERE id=?`)
+      .bind(it.id || it.id_barang || it.barang_id)
+      .first();
+
+    namaBarang = rowBarang?.nama || "";
   }
+
+  await env.BMT_DB.prepare(`
+    INSERT INTO riwayat(
+      transaksi_id, tipe, barang_id, barang_nama,
+      jumlah, harga, catatan, dibuat_oleh, created_at
+    )
+    VALUES (?,?,?,?,?,?,?,?,?)
+  `).bind(
+      svc.transaksi_id,
+      "keluar",
+      it.id || it.id_barang || it.barang_id,
+      namaBarang,
+      Number(it.qty || it.jumlah || 0),
+      Number(it.harga || 0),
+      "",
+      svc.teknisi || "Admin",
+      now
+  ).run();
+}
 
   // ===============================
   // 4) INSERT CHARGE → RIWAYAT
@@ -1270,18 +1268,50 @@ async function riwayatAll(env, url) {
   const limit = Number(url.searchParams.get("limit") || 50);
   const offset = Number(url.searchParams.get("offset") || 0);
 
-  const rows = await env.BMT_DB
-    .prepare(`
-      SELECT transaksi_id, MIN(created_at) AS waktu
-      FROM riwayat
-      GROUP BY transaksi_id
-      ORDER BY waktu DESC
-      LIMIT ? OFFSET ?
-    `)
-    .bind(limit, offset)
-    .all();
+  const rows = await env.BMT_DB.prepare(`
+    SELECT
+      transaksi_id,
 
-  return json({ items: rows.results || [] });
+      MIN(created_at) AS waktu,
+
+      -- tipe utama transaksi
+      CASE
+        WHEN SUM(CASE WHEN tipe='servis' THEN 1 ELSE 0 END) > 0 THEN 'servis'
+        WHEN SUM(CASE WHEN tipe='keluar' THEN 1 ELSE 0 END) > 0 THEN 'keluar'
+        WHEN SUM(CASE WHEN tipe='masuk'  THEN 1 ELSE 0 END) > 0 THEN 'masuk'
+        WHEN SUM(CASE WHEN tipe='audit'  THEN 1 ELSE 0 END) > 0 THEN 'audit'
+        ELSE 'lain'
+      END AS tipe,
+
+      -- total nilai transaksi (FINAL untuk preview)
+      (
+        -- biaya servis
+        IFNULL(SUM(CASE WHEN tipe='servis' THEN harga ELSE 0 END), 0)
+        +
+        -- total charge
+        IFNULL(SUM(CASE WHEN tipe='charge' THEN harga ELSE 0 END), 0)
+        +
+        -- total penjualan (stok keluar non-servis)
+        IFNULL(SUM(CASE
+          WHEN tipe='keluar' THEN jumlah * harga
+          ELSE 0
+        END), 0)
+      ) AS total
+
+    FROM riwayat
+    GROUP BY transaksi_id
+    ORDER BY waktu DESC
+    LIMIT ? OFFSET ?
+  `).bind(limit, offset).all();
+
+  return json({
+    items: (rows.results || []).map(r => ({
+      transaksi_id: r.transaksi_id,
+      waktu: r.waktu,
+      tipe: r.tipe,        // untuk label UI
+      total: Number(r.total || 0)
+    }))
+  });
 }
 
 async function riwayatDetail(env, req) {
