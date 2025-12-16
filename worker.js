@@ -1265,44 +1265,69 @@ async function servisUpdateBiaya(env, req) {
 //////////////////////////////
 
 async function riwayatAll(env, url) {
-  const limit  = Number(url.searchParams.get("limit")  || 50);
+  const limit  = Number(url.searchParams.get("limit")  || 10);
   const offset = Number(url.searchParams.get("offset") || 0);
 
-  // 1️⃣ Ambil SEMUA baris riwayat (MENTAH)
   const q = await env.BMT_DB.prepare(`
-    SELECT *
+    SELECT
+      transaksi_id,
+      MIN(created_at) AS waktu,
+
+      CASE
+        WHEN SUM(CASE WHEN tipe='servis' THEN 1 ELSE 0 END) > 0 THEN 'servis'
+        WHEN SUM(CASE WHEN tipe='keluar' THEN 1 ELSE 0 END) > 0 THEN 'keluar'
+        WHEN SUM(CASE WHEN tipe='masuk'  THEN 1 ELSE 0 END) > 0 THEN 'masuk'
+        WHEN SUM(CASE WHEN tipe='audit'  THEN 1 ELSE 0 END) > 0 THEN 'audit'
+        ELSE 'lain'
+      END AS tipe,
+
+      -- SERAGAM: selalu pakai dibuat_oleh
+      MAX(dibuat_oleh) AS dibuat_oleh,
+
+      -- agregasi nilai
+      SUM(CASE WHEN tipe='servis' THEN harga ELSE 0 END) AS servis_total,
+      SUM(CASE WHEN tipe='charge' THEN harga ELSE 0 END) AS charge_total,
+      SUM(CASE WHEN tipe='keluar' THEN jumlah * harga ELSE 0 END) AS barang_total
+
     FROM riwayat
-    ORDER BY created_at DESC
+    GROUP BY transaksi_id
+    ORDER BY waktu DESC
     LIMIT ? OFFSET ?
   `).bind(limit, offset).all();
 
-  const rows = q.results || [];
+  const items = (q.results || []).map(r => {
+    const servis = Number(r.servis_total || 0);
+    const charge = Number(r.charge_total || 0);
+    const barang = Number(r.barang_total || 0);
 
-  // 2️⃣ Grouping per transaksi_id (TANPA LOGIC BISNIS)
-  const map = {};
+    return {
+      transaksi_id: r.transaksi_id,
+      waktu: r.waktu,
+      tipe: r.tipe,
 
-  for (const r of rows) {
-    const tid = r.transaksi_id;
+      // FIELD FINAL
+      dibuat_oleh: r.dibuat_oleh || "Admin",
 
-    if (!map[tid]) {
-      map[tid] = {
-        transaksi_id: tid,
-        waktu: r.created_at,
-        rows: []
-      };
-    }
+      servis: {
+        ada: servis > 0,
+        total: servis
+      },
+      charge: {
+        ada: charge > 0,
+        total: charge
+      },
+      barang: {
+        ada: barang > 0,
+        total: barang
+      },
 
-    // simpan semua baris apa adanya
-    map[tid].rows.push(r);
-  }
+      total: servis + charge + barang
+    };
+  });
 
-  // 3️⃣ Susun array hasil (urut waktu DESC)
-  const items = Object.values(map).sort(
-    (a, b) => new Date(b.waktu) - new Date(a.waktu)
-  );
-
-  // 4️⃣ Response: BACKWARD COMPATIBLE
-  return json({ items });
+  return new Response(JSON.stringify({ items }), {
+    headers: { "Content-Type": "application/json" }
+  });
 }
 
 async function riwayatDetail(env, req) {
