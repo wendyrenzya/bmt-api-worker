@@ -128,6 +128,9 @@ if (path.startsWith("/api/riwayat_servis/") && method === "GET")
       if (path.startsWith("/api/riwayat/") && method === "GET")
         return riwayatDetail(env, request);
 
+if (path === "/api/riwayat_all" && method === "GET")
+  return riwayatAllFull(env, url);
+  
       // ==========================
       // PER-BARANG HISTORY
       // ==========================
