@@ -1265,16 +1265,14 @@ async function servisUpdateBiaya(env, req) {
 //////////////////////////////
 
 async function riwayatAll(env, url) {
-  const limit = Number(url.searchParams.get("limit") || 50);
+  const limit  = Number(url.searchParams.get("limit")  || 10);
   const offset = Number(url.searchParams.get("offset") || 0);
 
-  const rows = await env.BMT_DB.prepare(`
+  const q = await env.BMT_DB.prepare(`
     SELECT
       transaksi_id,
-
       MIN(created_at) AS waktu,
 
-      -- tipe utama transaksi
       CASE
         WHEN SUM(CASE WHEN tipe='servis' THEN 1 ELSE 0 END) > 0 THEN 'servis'
         WHEN SUM(CASE WHEN tipe='keluar' THEN 1 ELSE 0 END) > 0 THEN 'keluar'
@@ -1283,20 +1281,13 @@ async function riwayatAll(env, url) {
         ELSE 'lain'
       END AS tipe,
 
-      -- total nilai transaksi (FINAL untuk preview)
-      (
-        -- biaya servis
-        IFNULL(SUM(CASE WHEN tipe='servis' THEN harga ELSE 0 END), 0)
-        +
-        -- total charge
-        IFNULL(SUM(CASE WHEN tipe='charge' THEN harga ELSE 0 END), 0)
-        +
-        -- total penjualan (stok keluar non-servis)
-        IFNULL(SUM(CASE
-          WHEN tipe='keluar' THEN jumlah * harga
-          ELSE 0
-        END), 0)
-      ) AS total
+      -- SERAGAM: selalu pakai dibuat_oleh
+      MAX(dibuat_oleh) AS dibuat_oleh,
+
+      -- agregasi nilai
+      SUM(CASE WHEN tipe='servis' THEN harga ELSE 0 END) AS servis_total,
+      SUM(CASE WHEN tipe='charge' THEN harga ELSE 0 END) AS charge_total,
+      SUM(CASE WHEN tipe='keluar' THEN jumlah * harga ELSE 0 END) AS barang_total
 
     FROM riwayat
     GROUP BY transaksi_id
@@ -1304,13 +1295,38 @@ async function riwayatAll(env, url) {
     LIMIT ? OFFSET ?
   `).bind(limit, offset).all();
 
-  return json({
-    items: (rows.results || []).map(r => ({
+  const items = (q.results || []).map(r => {
+    const servis = Number(r.servis_total || 0);
+    const charge = Number(r.charge_total || 0);
+    const barang = Number(r.barang_total || 0);
+
+    return {
       transaksi_id: r.transaksi_id,
       waktu: r.waktu,
-      tipe: r.tipe,        // untuk label UI
-      total: Number(r.total || 0)
-    }))
+      tipe: r.tipe,
+
+      // FIELD FINAL
+      dibuat_oleh: r.dibuat_oleh || "Admin",
+
+      servis: {
+        ada: servis > 0,
+        total: servis
+      },
+      charge: {
+        ada: charge > 0,
+        total: charge
+      },
+      barang: {
+        ada: barang > 0,
+        total: barang
+      },
+
+      total: servis + charge + barang
+    };
+  });
+
+  return new Response(JSON.stringify({ items }), {
+    headers: { "Content-Type": "application/json" }
   });
 }
 
