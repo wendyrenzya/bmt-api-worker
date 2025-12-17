@@ -798,7 +798,7 @@ async function stokKeluar(env, req) {
       )
       .run();
     
-// PATCH RIWAYAT — STOK KELUAR (KOMPATIBEL)
+// PATCH RIWAYAT — STOK KELUAR (FINAL & BENAR)
 const rowBarang = await env.BMT_DB
   .prepare(`SELECT nama FROM barang WHERE id=?`)
   .bind(it.id)
@@ -822,7 +822,7 @@ await env.BMT_DB.prepare(
 ).bind(
   "keluar",
   it.id,
-  namaBarang,
+  namaBarang,              // ⬅️ SEKARANG TERISI
   it.jumlah || it.qty || 0,
   it.harga || 0,
   0,
