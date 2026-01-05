@@ -1766,37 +1766,34 @@ async function bonusUpdateStatus(env, req){
 async function laporanBulanan(env, url) {
   const month = url.searchParams.get("bulan") || new Date().toISOString().slice(0,7);
 
-  const start = `${month}-01T00:00:00Z`;
   const [y, m] = month.split("-").map(Number);
-  const end = new Date(Date.UTC(y, m, 1)).toISOString();
+  const startDate = `${month}-01`;
+  const lastDay = new Date(y, m, 0).getDate();
+  const endDate = `${month}-${String(lastDay).padStart(2, "0")}`;
 
   try {
-    // PENJUALAN = stok_keluar PJL-*
+    // PENJUALAN BARANG (SEMUA stok_keluar)
     const pen = await env.BMT_DB.prepare(`
       SELECT IFNULL(SUM(harga * jumlah),0) AS total
       FROM stok_keluar
-      WHERE transaksi_id LIKE 'PJL-%'
-        AND created_at >= ?
-        AND created_at < ?
-    `).bind(start, end).first();
+      WHERE DATE(created_at) BETWEEN DATE(?) AND DATE(?)
+    `).bind(startDate, endDate).first();
 
-    // CHARGE = servis transaksi_id CHG-*
+    // CHARGE SERVIS
     const chg = await env.BMT_DB.prepare(`
       SELECT IFNULL(SUM(biaya_servis),0) AS total
       FROM servis
       WHERE transaksi_id LIKE 'CHG-%'
         AND status != 'batal'
-        AND created_at >= ?
-        AND created_at < ?
-    `).bind(start, end).first();
+        AND DATE(created_at) BETWEEN DATE(?) AND DATE(?)
+    `).bind(startDate, endDate).first();
 
     // PENGELUARAN
     const out = await env.BMT_DB.prepare(`
       SELECT IFNULL(SUM(jumlah),0) AS total
       FROM pengeluaran
-      WHERE created_at >= ?
-        AND created_at < ?
-    `).bind(start, end).first();
+      WHERE DATE(created_at) BETWEEN DATE(?) AND DATE(?)
+    `).bind(startDate, endDate).first();
 
     return json({
       total_penjualan: Number(pen.total || 0),
