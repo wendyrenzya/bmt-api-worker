@@ -1298,7 +1298,12 @@ const filteredRows = rows.filter(
   
   return json({
   transaksi_id: tid,
-  servis: {},
+  servis: {
+  transaksi_id: tid,
+  nama_servis: "",
+  biaya: 0,
+  created_at: null
+},
 
   // === CHARGE Field Baru ===
   charge: [],
