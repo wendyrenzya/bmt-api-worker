@@ -1282,11 +1282,7 @@ async function riwayatDetail(env, req) {
     `)
     .bind(tid)
     .all();
-// PATCH: tarik detail servis jika exist
-  const srv = await env.BMT_DB
-    .prepare(`SELECT * FROM riwayat_servis WHERE transaksi_id=? LIMIT 1`)
-    .bind(tid)
-    .first();
+
   const rows = r.results || [];
 
   // === PATCH CHARGE ===
@@ -1302,7 +1298,6 @@ const filteredRows = rows.filter(
   
   return json({
   transaksi_id: tid,
-  servis: srv || null,
 
   // === CHARGE Field Baru ===
   charge: chargeItems,
