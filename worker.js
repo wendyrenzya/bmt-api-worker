@@ -1285,20 +1285,30 @@ async function riwayatDetail(env, req) {
 
   const rows = r.results || [];
 
+  // === PATCH CHARGE ===
+// Ambil CHARGE dari keterangan
+const chargeItems = rows.filter(
+  x => x.keterangan && x.keterangan.includes("#CHG_FOR=" + tid)
+);
 
+// Buang CHARGE dari rows lain
+const filteredRows = rows.filter(
+  x => !(x.keterangan && x.keterangan.includes("#CHG_FOR=" + tid))
+);
   
   return json({
   transaksi_id: tid,
+  servis: null,
 
   // === CHARGE Field Baru ===
-  charge: [],
+  charge: null,
 
   // === rows tanpa charge ===
-  masuk: rows.filter(x => x.tipe === "masuk"),
+  masuk: filteredRows.filter(x => x.tipe === "masuk"),
 
-  keluar: rows.filter(x => x.tipe === "keluar"),
+  keluar: filteredRows.filter(x => x.tipe === "keluar"),
 
-  audit: rows
+  audit: filteredRows
     .filter(x => x.tipe === "audit")
     .map(x => ({
       ...x,
