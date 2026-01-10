@@ -1301,7 +1301,7 @@ const filteredRows = rows.filter(
   servis: null,
 
   // === CHARGE Field Baru ===
-  charge: null,
+  charge: [],
 
   // === rows tanpa charge ===
   masuk: filteredRows.filter(x => x.tipe === "masuk"),
