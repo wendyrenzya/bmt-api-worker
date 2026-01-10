@@ -1294,11 +1294,11 @@ async function riwayatDetail(env, req) {
   charge: [],
 
   // === rows tanpa charge ===
-  masuk: filteredRows.filter(x => x.tipe === "masuk"),
+  masuk: rows.filter(x => x.tipe === "masuk"),
 
-  keluar: filteredRows.filter(x => x.tipe === "keluar"),
+  keluar: rows.filter(x => x.tipe === "keluar"),
 
-  audit: filteredRows
+  audit: rows
     .filter(x => x.tipe === "audit")
     .map(x => ({
       ...x,
