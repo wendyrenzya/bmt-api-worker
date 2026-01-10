@@ -1285,22 +1285,13 @@ async function riwayatDetail(env, req) {
 
   const rows = r.results || [];
 
-  // === PATCH CHARGE ===
-// Ambil CHARGE dari keterangan
-const chargeItems = rows.filter(
-  x => x.keterangan && x.keterangan.includes("#CHG_FOR=" + tid)
-);
 
-// Buang CHARGE dari rows lain
-const filteredRows = rows.filter(
-  x => !(x.keterangan && x.keterangan.includes("#CHG_FOR=" + tid))
-);
   
   return json({
   transaksi_id: tid,
 
   // === CHARGE Field Baru ===
-  charge: chargeItems,
+  charge: [],
 
   // === rows tanpa charge ===
   masuk: filteredRows.filter(x => x.tipe === "masuk"),
