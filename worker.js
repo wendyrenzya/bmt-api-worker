@@ -1807,18 +1807,16 @@ async function laporanBulanan(env, url) {
 // LAPORAN: HARIAN SUMMARY (HARI INI)
 // ======================================================
 async function laporanHarianSummary(env){
-  // Cloudflare D1 pakai UTC → konversi ke lokal +8
-  // Tapi kita tetap pakai DATE(created_at) supaya aman.
   const penjualan = await env.BMT_DB.prepare(`
     SELECT SUM(jumlah * harga) AS total
     FROM stok_keluar
-    WHERE DATE(created_at) = DATE('now')
+    WHERE DATE(created_at, '+8 hours') = DATE('now', '+8 hours')
   `).first();
 
   const pengeluaran = await env.BMT_DB.prepare(`
     SELECT SUM(jumlah) AS total
     FROM pengeluaran
-    WHERE DATE(created_at) = DATE('now')
+    WHERE DATE(created_at, '+8 hours') = DATE('now', '+8 hours')
   `).first();
 
   const totalPenjualan = Number(penjualan?.total || 0);
