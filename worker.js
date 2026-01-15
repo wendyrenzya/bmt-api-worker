@@ -1829,7 +1829,7 @@ async function laporanHarianSummary(env){
     total_pengeluaran: totalPengeluaran,
     profit
   });
-}
+}}
 
 
 // ======================================================
