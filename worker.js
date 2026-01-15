@@ -1298,12 +1298,7 @@ const filteredRows = rows.filter(
   
   return json({
   transaksi_id: tid,
-  servis: {
-  transaksi_id: tid,
-  nama_servis: "",
-  biaya: 0,
-  created_at: null
-},
+  servis: null,
 
   // === CHARGE Field Baru ===
   charge: [],
@@ -1855,20 +1850,22 @@ async function laporanHarianRange(env, url){
       DATE(created_at) AS hari,
       SUM(jumlah * harga) AS total_penjualan
     FROM stok_keluar
-    WHERE DATE(created_at) BETWEEN DATE(?) AND DATE(?)
+    WHERE DATE(created_at) >= DATE(?)
+      AND DATE(created_at) <  DATE(?)
     GROUP BY DATE(created_at)
     ORDER BY DATE(created_at)
-  `).bind(start, end).all();
+`).bind(start, end).all();
 
-  const rowsPengeluaran = await env.BMT_DB.prepare(`
+const rowsPengeluaran = await env.BMT_DB.prepare(`
     SELECT
       DATE(created_at) AS hari,
       SUM(jumlah) AS total_pengeluaran
     FROM pengeluaran
-    WHERE DATE(created_at) BETWEEN DATE(?) AND DATE(?)
+    WHERE DATE(created_at) >= DATE(?)
+      AND DATE(created_at) <  DATE(?)
     GROUP BY DATE(created_at)
     ORDER BY DATE(created_at)
-  `).bind(start, end).all();
+`).bind(start, end).all();
 
   // Gabungkan data kedua tabel
   const map = {};
