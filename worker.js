@@ -1848,8 +1848,8 @@ async function laporanHarianRange(env, url){
       DATE(created_at) AS hari,
       SUM(jumlah * harga) AS total_penjualan
     FROM stok_keluar
-    WHERE DATE(created_at) >= DATE(?)
-      AND DATE(created_at) <  DATE(?)
+    WHERE DATE(created_at, '+8 hours') >= DATE(?)
+  AND DATE(created_at, '+8 hours') <  DATE(?)
     GROUP BY DATE(created_at)
     ORDER BY DATE(created_at)
 `).bind(start, end).all();
