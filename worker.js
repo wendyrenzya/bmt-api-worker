@@ -537,20 +537,21 @@ async function addBarang(env, req) {
   const r = await env.BMT_DB
     .prepare(`
     INSERT INTO barang (
-      kode_barang, nama, kategori, harga, harga_modal, stock, foto, deskripsi, created_at
-    ) VALUES (?,?,?,?,?,?,?,?,?)
+  kode_barang, nama, merek, kategori, harga, harga_modal, stock, foto, deskripsi, created_at
+) VALUES (?,?,?,?,?,?,?,?,?,?)
   `)
     .bind(
-      b.kode_barang || "KB" + Date.now().toString().slice(-6),
-      b.nama,
-      b.kategori || "",
-      Number(b.harga || 0),
-      Number(b.harga_modal || 0),
-      Number(b.stock || 0),
-      b.foto || "",
-      b.deskripsi || "",
-      now
-    )
+  b.kode_barang || "KB" + Date.now().toString().slice(-6),
+  b.nama,
+  b.merek || "",
+  b.kategori || "",
+  Number(b.harga || 0),
+  Number(b.harga_modal || 0),
+  Number(b.stock || 0),
+  b.foto || "",
+  b.deskripsi || "",
+  now
+)
     .run();
 
   return json({ ok: true, id: r.lastRowId || null });
@@ -579,14 +580,15 @@ async function updateBarang(env, req) {
   // PERHATIKAN: "stock" sengaja TIDAK ADA karena tidak boleh edit manual
   ///////////////////////////////////////////////////////////////
   const allowed = [
-    "nama",
-    "kategori",
-    "harga",
-    "harga_modal",
-    "foto",
-    "deskripsi",
-    "kode_barang"
-  ];
+  "nama",
+  "merek",
+  "kategori",
+  "harga",
+  "harga_modal",
+  "foto",
+  "deskripsi",
+  "kode_barang"
+];
 
   ///////////////////////////////////////////////////////////////
   // Build SET SQL dinamis
