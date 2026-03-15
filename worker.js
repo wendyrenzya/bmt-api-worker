@@ -582,6 +582,7 @@ async function updateBarang(env, req) {
   const allowed = [
   "nama",
   "merek",
+  "alias",
   "kategori",
   "harga",
   "harga_modal",
