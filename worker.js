@@ -537,7 +537,7 @@ async function addBarang(env, req) {
   const r = await env.BMT_DB
     .prepare(`
     INSERT INTO barang (
-  kode_barang, nama, merek, kategori, harga, harga_modal, stock, foto, deskripsi, created_at
+  kode_barang, nama, merek, kategori, harga, komisi, stock, foto, deskripsi, created_at
 ) VALUES (?,?,?,?,?,?,?,?,?,?)
   `)
     .bind(
@@ -546,7 +546,7 @@ async function addBarang(env, req) {
   b.merek || "",
   b.kategori || "",
   Number(b.harga || 0),
-  Number(b.harga_modal || 0),
+  Number(b.komisi || 0),
   Number(b.stock || 0),
   b.foto || "",
   b.deskripsi || "",
@@ -585,7 +585,7 @@ async function updateBarang(env, req) {
   "alias",
   "kategori",
   "harga",
-  "harga_modal",
+  "komisi",
   "foto",
   "deskripsi",
   "kode_barang"
@@ -816,7 +816,7 @@ await env.BMT_DB.prepare(
     barang_nama,
     jumlah,
     harga,
-    harga_modal,
+    komisi,
     catatan,
     dibuat_oleh,
     created_at,
