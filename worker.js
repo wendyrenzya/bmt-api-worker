@@ -587,6 +587,7 @@ async function updateBarang(env, req) {
   "harga",
   "komisi",
   "foto",
+  "lokasi",
   "deskripsi",
   "kode_barang"
 ];
@@ -730,7 +731,7 @@ await env.BMT_DB.prepare(
     barang_nama,
     jumlah,
     harga,
-    harga_modal,
+    komisi,
     catatan,
     dibuat_oleh,
     created_at,
