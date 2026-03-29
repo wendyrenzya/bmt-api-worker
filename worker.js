@@ -1144,23 +1144,13 @@ async function servisSelesai(env, req, params) {
    3) FIX BESAR — batal charge → benar-benar tidak muncul di detail
    ------------------------------------------------------------------- */
 async function servisBatalCharge(env, id_servis) {
-  // Ambil status charge
-  const row = await env.BMT_DB.prepare(`
-SELECT transaksi_id, status
-FROM servis
-WHERE id_servis=?
-`).bind(id_servis).first();
 
-  // Jika tidak ada → selesai
-  if (!row) return json({ ok: true });
-  if (row.status === "batal") return json({ ok: true });
-
-  // Update charge menjadi batal (tanpa batal_at, dibatalkan_oleh)
+  // hapus semua row charge milik servis ini
   await env.BMT_DB.prepare(`
-UPDATE servis
-SET status='batal'
-WHERE id_servis=?
-`).bind(id_servis).run();
+    DELETE FROM servis
+    WHERE id_servis = ?
+    AND transaksi_id LIKE 'CHG-%'
+  `).bind(id_servis).run();
 
   return json({ ok: true });
 }
