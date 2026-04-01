@@ -1836,19 +1836,20 @@ async function laporanHarianRange(env, url){
   if(!start || !end)
     return json({ error: "start & end required" }, 400);
 
-  // Ambil semua tanggal antara start dan end
+  // Ambil penjualan
   const rows = await env.BMT_DB.prepare(`
     SELECT
       DATE(created_at) AS hari,
       SUM(jumlah * harga) AS total_penjualan
     FROM stok_keluar
     WHERE DATE(created_at, '+8 hours') >= DATE(?)
-  AND DATE(created_at, '+8 hours') <  DATE(?)
+      AND DATE(created_at, '+8 hours') <  DATE(?)
     GROUP BY DATE(created_at)
     ORDER BY DATE(created_at)
-`).bind(start, end).all();
+  `).bind(start, end).all();
 
-const rowsPengeluaran = await env.BMT_DB.prepare(`
+  // Ambil pengeluaran
+  const rowsPengeluaran = await env.BMT_DB.prepare(`
     SELECT
       DATE(created_at) AS hari,
       SUM(jumlah) AS total_pengeluaran
@@ -1857,9 +1858,9 @@ const rowsPengeluaran = await env.BMT_DB.prepare(`
       AND DATE(created_at) <  DATE(?)
     GROUP BY DATE(created_at)
     ORDER BY DATE(created_at)
-`).bind(start, end).all();
+  `).bind(start, end).all();
 
-  // Gabungkan data kedua tabel
+  // Mapping awal
   const map = {};
 
   rows.results.forEach(r=>{
@@ -1874,34 +1875,43 @@ const rowsPengeluaran = await env.BMT_DB.prepare(`
     map[d].pengeluaran = Number(r.total_pengeluaran || 0);
   });
 
-  // Hitung profit
+  // Hitung profit awal
   Object.values(map).forEach(x=>{
     x.profit = x.penjualan - x.pengeluaran;
   });
 
-  // Sort ascending by date
+  // Sort tanggal
   const hasil = Object.values(map).sort((a,b)=>a.tanggal.localeCompare(b.tanggal));
-// PATCH: Tambah pengeluaran_list & filter kategori (case-insensitive)
-for (const x of hasil) {
-  const list = await env.BMT_DB.prepare(`
-    SELECT nama, kategori, jumlah, catatan, dibuat_oleh, created_at
-    FROM pengeluaran
-    WHERE DATE(created_at) = DATE(?)
-    ORDER BY created_at ASC
-  `).bind(x.tanggal).all();
 
-  const pengeluaranList = list.results || [];
+  // DETAIL + FILTER KATEGORI (FIX DI SINI)
+  for (const x of hasil) {
+    const list = await env.BMT_DB.prepare(`
+      SELECT nama, kategori, jumlah, catatan, dibuat_oleh, created_at
+      FROM pengeluaran
+      WHERE DATE(created_at) = DATE(?)
+      ORDER BY created_at ASC
+    `).bind(x.tanggal).all();
 
-  const filtered = pengeluaranList.filter(p => {
-    const k = String(p.kategori || "").toLowerCase();
-    return k === "operasional" || k === "lain-lain";
-  });
+    const pengeluaranList = list.results || [];
 
-  const totalFiltered = filtered.reduce((t, p) => t + Number(p.jumlah || 0), 0);
+    const filtered = pengeluaranList.filter(p => {
+      const k = String(p.kategori || "").toLowerCase();
+      return (
+        k === "operasional" ||
+        k === "lain-lain" ||
+        k === "komisi"
+      );
+    });
 
-  x.pengeluaran_list = pengeluaranList;
-  x.pengeluaran_operasional_lain = totalFiltered;
-}
+    const totalFiltered = filtered.reduce((t, p) => t + Number(p.jumlah || 0), 0);
+
+    x.pengeluaran_list = pengeluaranList;
+    x.pengeluaran_operasional_lain = totalFiltered;
+
+    // OPTIONAL: kalau mau profit ikut pakai filtered (bukan total semua pengeluaran)
+    // x.profit = x.penjualan - totalFiltered;
+  }
+
   return json({ items: hasil });
 }
 
