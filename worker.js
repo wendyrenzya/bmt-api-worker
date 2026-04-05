@@ -707,6 +707,22 @@ async function stokMasuk(env, req) {
       .bind(newStock, it.id)
       .run();
 
+// ✅ PATCH TRACKING
+await env.BMT_DB.prepare(`
+  INSERT INTO stock_track
+  (barang_id, transaksi_id, sumber, stock_awal, qty, stock_akhir, dibuat_oleh, created_at)
+  VALUES (?,?,?,?,?,?,?,?)
+`).bind(
+  it.id,
+  tid,
+  "MASUK",
+  Number(old.stock || 0),
+  Number(it.jumlah || 0),
+  newStock,
+  operator,
+  now
+).run();
+
     await env.BMT_DB
       .prepare(
         `INSERT INTO stok_masuk(
@@ -784,6 +800,22 @@ async function stokKeluar(env, req) {
       .prepare(`UPDATE barang SET stock=? WHERE id=?`)
       .bind(newStock, it.id)
       .run();
+
+// ✅ PATCH TRACKING
+await env.BMT_DB.prepare(`
+  INSERT INTO stock_track
+  (barang_id, transaksi_id, sumber, stock_awal, qty, stock_akhir, dibuat_oleh, created_at)
+  VALUES (?,?,?,?,?,?,?,?)
+`).bind(
+  it.id,
+  tid,
+  "KELUAR",
+  Number(row.stock || 0),
+  Number(it.jumlah || it.qty || 0),
+  newStock,
+  operator,
+  now
+).run();
 
     await env.BMT_DB
       .prepare(
@@ -876,6 +908,22 @@ async function stokAudit(env, req) {
       .prepare("UPDATE barang SET stock=? WHERE id=?")
       .bind(stok_baru, barang_id)
       .run();
+
+// ✅ PATCH TRACKING
+await env.BMT_DB.prepare(`
+  INSERT INTO stock_track
+  (barang_id, transaksi_id, sumber, stock_awal, qty, stock_akhir, dibuat_oleh, created_at)
+  VALUES (?,?,?,?,?,?,?,?)
+`).bind(
+  barang_id,
+  tid,
+  "AUDIT",
+  stok_lama,
+  stok_baru - stok_lama,
+  stok_baru,
+  operator,
+  now
+).run();
 
     // INSERT stok_audit
     await env.BMT_DB
