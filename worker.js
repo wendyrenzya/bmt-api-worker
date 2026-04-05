@@ -55,7 +55,7 @@ if (path === "/api/absensi" && method === "GET")
       if (path === "/api/stok_audit" && method === "POST")
         return stokAudit(env, request);
         
-        if (pathname === "/api/stock_track") return stockTrack(env);
+        if (path === "/api/stock_track") return stockTrack(env);
 
       // ==========================
       // SEARCH / KATEGORI
