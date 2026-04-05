@@ -1123,6 +1123,40 @@ async function servisSelesai(env, req, params) {
   // Parse items servis (barang dipakai)
   let barang = [];
   try { barang = JSON.parse(svc.items || "[]"); } catch { barang = []; }
+  // ===============================
+// ✅ PATCH: TRACKING SERVIS
+// ===============================
+for (const it of barang) {
+  const barang_id = it.id || it.barang_id;
+  const qty = Number(it.jumlah || it.qty || 0);
+
+  if (!barang_id || qty <= 0) continue;
+
+  // ambil stok SAAT INI (setelah pengurangan terjadi)
+  const row = await env.BMT_DB.prepare(`
+    SELECT stock FROM barang WHERE id=?
+  `).bind(barang_id).first();
+
+  if (!row) continue;
+
+  const stock_akhir = Number(row.stock || 0);
+  const stock_awal = stock_akhir + qty; // balik untuk tracking
+
+  await env.BMT_DB.prepare(`
+    INSERT INTO stock_track
+    (barang_id, transaksi_id, sumber, stock_awal, qty, stock_akhir, dibuat_oleh, created_at)
+    VALUES (?,?,?,?,?,?,?,?)
+  `).bind(
+    barang_id,
+    svc.transaksi_id,
+    "SERVIS",
+    stock_awal,
+    qty,
+    stock_akhir,
+    selesaiOleh,
+    now
+  ).run();
+}
 
   // ===============================
   // 1) UPDATE status jadi selesai
