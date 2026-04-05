@@ -804,20 +804,23 @@ async function stokKeluar(env, req) {
       .run();
 
 // ✅ PATCH TRACKING
-await env.BMT_DB.prepare(`
-  INSERT INTO stock_track
-  (barang_id, transaksi_id, sumber, stock_awal, qty, stock_akhir, dibuat_oleh, created_at)
-  VALUES (?,?,?,?,?,?,?,?)
-`).bind(
-  it.id,
-  tid,
-  "KELUAR",
-  Number(row.stock || 0),
-  Number(it.jumlah || it.qty || 0),
-  newStock,
-  operator,
-  now
-).run();
+// Skip jika servis — servisSelesai yang akan mencatat dengan sumber="SERVIS"
+if (!tid.startsWith("SRV-")) {
+  await env.BMT_DB.prepare(`
+    INSERT INTO stock_track
+    (barang_id, transaksi_id, sumber, stock_awal, qty, stock_akhir, dibuat_oleh, created_at)
+    VALUES (?,?,?,?,?,?,?,?)
+  `).bind(
+    it.id,
+    tid,
+    "KELUAR",
+    Number(row.stock || 0),
+    Number(it.jumlah || it.qty || 0),
+    newStock,
+    operator,
+    now
+  ).run();
+}
 
     await env.BMT_DB
       .prepare(
