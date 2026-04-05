@@ -54,6 +54,8 @@ if (path === "/api/absensi" && method === "GET")
       // ==========================
       if (path === "/api/stok_audit" && method === "POST")
         return stokAudit(env, request);
+        
+        if (pathname === "/api/stock_track") return stockTrack(env);
 
       // ==========================
       // SEARCH / KATEGORI
@@ -1873,6 +1875,31 @@ async function laporanHarianSummary(env){
   });
 }
 
+async function stockTrack(env) {
+  try {
+    const rows = await env.BMT_DB.prepare(`
+      SELECT 
+        st.id,
+        st.barang_id,
+        st.transaksi_id,
+        st.sumber,
+        st.stock_awal,
+        st.qty,
+        st.stock_akhir,
+        st.dibuat_oleh,
+        st.created_at,
+        b.nama AS nama_barang
+      FROM stock_track st
+      LEFT JOIN barang b ON b.id = st.barang_id
+      ORDER BY st.id DESC
+      LIMIT 200
+    `).all();
+
+    return json(rows.results || []);
+  } catch (err) {
+    return json({ error: String(err) }, 500);
+  }
+}
 
 // ======================================================
 // LAPORAN: RENTANG HARIAN (CHART 7 HARI / RANGE MANUAL)
