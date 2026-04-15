@@ -334,9 +334,11 @@ function mergeItems(items) {
     const qty = Number(it.jumlah || it.qty || 0);
     if (map.has(key)) {
       map.get(key).jumlah += qty;
+      map.get(key).qty = map.get(key).jumlah;
     } else {
       map.set(key, {
         id:         key,
+        qty:        qty,
         jumlah:     qty,
         harga:      Number(it.harga  || 0),
         komisi:     Number(it.komisi || 0),
@@ -1297,9 +1299,7 @@ async function servisUpdateItems(env, req) {
     return json({ error: "servis is locked" }, 400);
   }
 
-  // Merge item dengan id sama → qty dijumlah, tidak boleh duplikat
-  const mergedItems = mergeItems(b.items || []);
-  const itemsJson = JSON.stringify(mergedItems);
+  const itemsJson = JSON.stringify(b.items || []);
 
   await env.BMT_DB
     .prepare(`UPDATE servis SET items=? WHERE id_servis=?`)
