@@ -1297,7 +1297,9 @@ async function servisUpdateItems(env, req) {
     return json({ error: "servis is locked" }, 400);
   }
 
-  const itemsJson = JSON.stringify(b.items || []);
+  // Merge item dengan id sama → qty dijumlah, tidak boleh duplikat
+  const mergedItems = mergeItems(b.items || []);
+  const itemsJson = JSON.stringify(mergedItems);
 
   await env.BMT_DB
     .prepare(`UPDATE servis SET items=? WHERE id_servis=?`)
@@ -1979,28 +1981,28 @@ async function laporanHarianRange(env, url){
   if(!start || !end)
     return json({ error: "start & end required" }, 400);
 
-  // Ambil penjualan (FIX: konsisten +8 hours)
+  // Ambil penjualan
   const rows = await env.BMT_DB.prepare(`
     SELECT
-      DATE(created_at, '+8 hours') AS hari,
+      DATE(created_at) AS hari,
       SUM(jumlah * harga) AS total_penjualan
     FROM stok_keluar
     WHERE DATE(created_at, '+8 hours') >= DATE(?)
       AND DATE(created_at, '+8 hours') <  DATE(?)
-    GROUP BY DATE(created_at, '+8 hours')
-    ORDER BY DATE(created_at, '+8 hours')
+    GROUP BY DATE(created_at)
+    ORDER BY DATE(created_at)
   `).bind(start, end).all();
 
-  // Ambil pengeluaran (FIX: konsisten +8 hours)
+  // Ambil pengeluaran
   const rowsPengeluaran = await env.BMT_DB.prepare(`
     SELECT
-      DATE(created_at, '+8 hours') AS hari,
+      DATE(created_at) AS hari,
       SUM(jumlah) AS total_pengeluaran
     FROM pengeluaran
-    WHERE DATE(created_at, '+8 hours') >= DATE(?)
-      AND DATE(created_at, '+8 hours') <  DATE(?)
-    GROUP BY DATE(created_at, '+8 hours')
-    ORDER BY DATE(created_at, '+8 hours')
+    WHERE DATE(created_at) >= DATE(?)
+      AND DATE(created_at) <  DATE(?)
+    GROUP BY DATE(created_at)
+    ORDER BY DATE(created_at)
   `).bind(start, end).all();
 
   // Mapping awal
@@ -2026,12 +2028,12 @@ async function laporanHarianRange(env, url){
   // Sort tanggal
   const hasil = Object.values(map).sort((a,b)=>a.tanggal.localeCompare(b.tanggal));
 
-  // DETAIL + FILTER KATEGORI (FIX: konsisten +8 hours)
+  // DETAIL + FILTER KATEGORI (FIX DI SINI)
   for (const x of hasil) {
     const list = await env.BMT_DB.prepare(`
       SELECT nama, kategori, jumlah, catatan, dibuat_oleh, created_at
       FROM pengeluaran
-      WHERE DATE(created_at, '+8 hours') = DATE(?)
+      WHERE DATE(created_at) = DATE(?)
       ORDER BY created_at ASC
     `).bind(x.tanggal).all();
 
@@ -2051,7 +2053,7 @@ async function laporanHarianRange(env, url){
     x.pengeluaran_list = pengeluaranList;
     x.pengeluaran_operasional_lain = totalFiltered;
 
-    // OPTIONAL:
+    // OPTIONAL: kalau mau profit ikut pakai filtered (bukan total semua pengeluaran)
     // x.profit = x.penjualan - totalFiltered;
   }
 
