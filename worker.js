@@ -320,6 +320,33 @@ function makeTID() {
   return `${ts}-${rnd}`;
 }
 
+/**
+ * mergeItems(items)
+ * Terima array item dengan field {id, jumlah/qty, harga, komisi, keterangan}
+ * Return array baru dimana item dengan id yang sama sudah dijumlah qty-nya.
+ * Harga/komisi diambil dari entry pertama yang ditemukan.
+ */
+function mergeItems(items) {
+  const map = new Map();
+  for (const it of items) {
+    const key = Number(it.id || it.barang_id);
+    if (!key) continue;
+    const qty = Number(it.jumlah || it.qty || 0);
+    if (map.has(key)) {
+      map.get(key).jumlah += qty;
+    } else {
+      map.set(key, {
+        id:         key,
+        jumlah:     qty,
+        harga:      Number(it.harga  || 0),
+        komisi:     Number(it.komisi || 0),
+        keterangan: it.keterangan || ""
+      });
+    }
+  }
+  return Array.from(map.values());
+}
+
 // === BONUS STATUS CACHE ===
 async function saveBonusStatus(env, data) {
   await env.BMT_DB.prepare(`
@@ -781,7 +808,7 @@ async function stokKeluar(env, req) {
   if (!b || !Array.isArray(b.items) || !b.items.length)
     return json({ error: "items[] required" }, 400);
 
-  const items = b.items;
+  const items = mergeItems(b.items);
   const operator = b.dibuat_oleh || b.operator || "Admin";
   const now = nowISO();
   const tid = b.transaksi_id || "PJL-" + makeTID();
@@ -1126,6 +1153,10 @@ async function servisSelesai(env, req, params) {
   // Parse items servis (barang dipakai)
   let barang = [];
   try { barang = JSON.parse(svc.items || "[]"); } catch { barang = []; }
+
+  // Merge barang yang sama → qty dijumlah, 1 entry per barang_id
+  barang = mergeItems(barang);
+
   // ===============================
 // ✅ PATCH: TRACKING SERVIS
 // ===============================
