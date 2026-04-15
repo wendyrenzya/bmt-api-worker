@@ -1979,28 +1979,28 @@ async function laporanHarianRange(env, url){
   if(!start || !end)
     return json({ error: "start & end required" }, 400);
 
-  // Ambil penjualan
+  // Ambil penjualan (FIX: konsisten +8 hours)
   const rows = await env.BMT_DB.prepare(`
     SELECT
-      DATE(created_at) AS hari,
+      DATE(created_at, '+8 hours') AS hari,
       SUM(jumlah * harga) AS total_penjualan
     FROM stok_keluar
     WHERE DATE(created_at, '+8 hours') >= DATE(?)
       AND DATE(created_at, '+8 hours') <  DATE(?)
-    GROUP BY DATE(created_at)
-    ORDER BY DATE(created_at)
+    GROUP BY DATE(created_at, '+8 hours')
+    ORDER BY DATE(created_at, '+8 hours')
   `).bind(start, end).all();
 
-  // Ambil pengeluaran
+  // Ambil pengeluaran (FIX: konsisten +8 hours)
   const rowsPengeluaran = await env.BMT_DB.prepare(`
     SELECT
-      DATE(created_at) AS hari,
+      DATE(created_at, '+8 hours') AS hari,
       SUM(jumlah) AS total_pengeluaran
     FROM pengeluaran
-    WHERE DATE(created_at) >= DATE(?)
-      AND DATE(created_at) <  DATE(?)
-    GROUP BY DATE(created_at)
-    ORDER BY DATE(created_at)
+    WHERE DATE(created_at, '+8 hours') >= DATE(?)
+      AND DATE(created_at, '+8 hours') <  DATE(?)
+    GROUP BY DATE(created_at, '+8 hours')
+    ORDER BY DATE(created_at, '+8 hours')
   `).bind(start, end).all();
 
   // Mapping awal
@@ -2026,12 +2026,12 @@ async function laporanHarianRange(env, url){
   // Sort tanggal
   const hasil = Object.values(map).sort((a,b)=>a.tanggal.localeCompare(b.tanggal));
 
-  // DETAIL + FILTER KATEGORI (FIX DI SINI)
+  // DETAIL + FILTER KATEGORI (FIX: konsisten +8 hours)
   for (const x of hasil) {
     const list = await env.BMT_DB.prepare(`
       SELECT nama, kategori, jumlah, catatan, dibuat_oleh, created_at
       FROM pengeluaran
-      WHERE DATE(created_at) = DATE(?)
+      WHERE DATE(created_at, '+8 hours') = DATE(?)
       ORDER BY created_at ASC
     `).bind(x.tanggal).all();
 
@@ -2051,7 +2051,7 @@ async function laporanHarianRange(env, url){
     x.pengeluaran_list = pengeluaranList;
     x.pengeluaran_operasional_lain = totalFiltered;
 
-    // OPTIONAL: kalau mau profit ikut pakai filtered (bukan total semua pengeluaran)
+    // OPTIONAL:
     // x.profit = x.penjualan - totalFiltered;
   }
 
