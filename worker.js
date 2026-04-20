@@ -620,6 +620,7 @@ async function updateBarang(env, req) {
   "foto",
   "lokasi",
   "deskripsi",
+  "stock",
   "kode_barang"
 ];
 
