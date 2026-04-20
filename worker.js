@@ -262,7 +262,9 @@ if (path === "/api/settings/custom_message" && method === "GET")
   return settingsGetCustomMessage(env);
 
 if (path === "/api/settings/custom_message" && method === "POST")
-  return settingsSetCustomMessage(env, request);     
+  return settingsSetCustomMessage(env, request);   
+
+if (path === "/api/stok_keluar" && method === "GET") return handleGetStokKeluar(request, env)  
   
 
       // ==========================
@@ -2059,6 +2061,70 @@ async function laporanHarianRange(env, url){
   }
 
   return json({ items: hasil });
+}
+// ============================================================
+// Sisipkan di worker.js — handler GET /api/stok_keluar
+// ============================================================
+
+// Di bagian routing utama (fetch handler), tambahkan:
+//   if (path === "/api/stok_keluar" && method === "GET") return handleGetStokKeluar(request, env);
+
+// ============================================================
+
+async function handleGetStokKeluar(request, env) {
+  try {
+    const url    = new URL(request.url);
+    const start  = url.searchParams.get("start");   // "YYYY-MM-DD"
+    const end    = url.searchParams.get("end");     // "YYYY-MM-DD" (exclusive)
+    const id     = url.searchParams.get("id");      // optional: single record
+
+    // ── Single record ──────────────────────────────────────────
+    if (id) {
+      const row = await env.DB
+        .prepare("SELECT * FROM stok_keluar WHERE rowid = ?")
+        .bind(id)
+        .first();
+
+      if (!row) {
+        return jsonResponse({ error: "Not found" }, 404);
+      }
+      return jsonResponse(row);
+    }
+
+    // ── Date-range query ───────────────────────────────────────
+    // created_at disimpan sebagai ISO string (misal "2025-04-20T08:30:00")
+    // Filter: created_at >= start dan created_at < end
+    let sql    = "SELECT * FROM stok_keluar";
+    const bind = [];
+
+    if (start && end) {
+      // Normalize: kalau hanya tanggal (tanpa T), tambahkan waktu
+      const tsStart = start.includes("T") ? start : start + "T00:00:00";
+      const tsEnd   = end.includes("T")   ? end   : end   + "T00:00:00";
+      sql += " WHERE created_at >= ? AND created_at < ?";
+      bind.push(tsStart, tsEnd);
+    } else if (start) {
+      const tsStart = start.includes("T") ? start : start + "T00:00:00";
+      sql += " WHERE created_at >= ?";
+      bind.push(tsStart);
+    }
+
+    sql += " ORDER BY created_at DESC";
+
+    const stmt   = env.DB.prepare(sql);
+    const result = bind.length
+      ? await stmt.bind(...bind).all()
+      : await stmt.all();
+
+    return jsonResponse({
+      items: result.results || [],
+      total: (result.results || []).length,
+    });
+
+  } catch (err) {
+    console.error("handleGetStokKeluar:", err);
+    return jsonResponse({ error: "Internal server error", detail: err.message }, 500);
+  }
 }
 
 //////////////////////////////
