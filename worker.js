@@ -2073,57 +2073,48 @@ async function laporanHarianRange(env, url){
 
 async function handleGetStokKeluar(request, env) {
   try {
-    const url    = new URL(request.url);
-    const start  = url.searchParams.get("start");   // "YYYY-MM-DD"
-    const end    = url.searchParams.get("end");     // "YYYY-MM-DD" (exclusive)
-    const id     = url.searchParams.get("id");      // optional: single record
+    const url   = new URL(request.url);
+    const start = url.searchParams.get("start");  // "YYYY-MM-DD"
+    const end   = url.searchParams.get("end");    // "YYYY-MM-DD" (exclusive)
+    const id    = url.searchParams.get("id");     // optional: single record
 
     // ── Single record ──────────────────────────────────────────
     if (id) {
-      const row = await env.DB
+      const row = await env.BMT_DB
         .prepare("SELECT * FROM stok_keluar WHERE rowid = ?")
         .bind(id)
         .first();
 
-      if (!row) {
-        return jsonResponse({ error: "Not found" }, 404);
-      }
-      return jsonResponse(row);
+      if (!row) return json({ error: "Not found" }, 404);
+      return json(row);
     }
 
-    // ── Date-range query ───────────────────────────────────────
-    // created_at disimpan sebagai ISO string (misal "2025-04-20T08:30:00")
-    // Filter: created_at >= start dan created_at < end
+    // ── Date-range query (WIB / UTC+7) ────────────────────────
     let sql    = "SELECT * FROM stok_keluar";
     const bind = [];
 
     if (start && end) {
-      // Normalize: kalau hanya tanggal (tanpa T), tambahkan waktu
-      const tsStart = start.includes("T") ? start : start + "T00:00:00";
-      const tsEnd   = end.includes("T")   ? end   : end   + "T00:00:00";
-      sql += " WHERE created_at >= ? AND created_at < ?";
-      bind.push(tsStart, tsEnd);
+      sql += " WHERE DATE(created_at, '+7 hours') >= DATE(?) AND DATE(created_at, '+7 hours') < DATE(?)";
+      bind.push(start, end);
     } else if (start) {
-      const tsStart = start.includes("T") ? start : start + "T00:00:00";
-      sql += " WHERE created_at >= ?";
-      bind.push(tsStart);
+      sql += " WHERE DATE(created_at, '+7 hours') >= DATE(?)";
+      bind.push(start);
     }
 
     sql += " ORDER BY created_at DESC";
 
-    const stmt   = env.DB.prepare(sql);
     const result = bind.length
-      ? await stmt.bind(...bind).all()
-      : await stmt.all();
+      ? await env.BMT_DB.prepare(sql).bind(...bind).all()
+      : await env.BMT_DB.prepare(sql).all();
 
-    return jsonResponse({
+    return json({
       items: result.results || [],
       total: (result.results || []).length,
     });
 
   } catch (err) {
     console.error("handleGetStokKeluar:", err);
-    return jsonResponse({ error: "Internal server error", detail: err.message }, 500);
+    return json({ error: "Internal server error", detail: err.message }, 500);
   }
 }
 
