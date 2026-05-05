@@ -272,6 +272,22 @@ if (path === "/api/settings/custom_message" && method === "POST")
 
 if (path === "/api/stok_keluar" && method === "GET") return handleGetStokKeluar(request, env)  
   
+// ================================================================
+// VISUAL SEARCH — Tambahkan ke worker.js
+//
+// ════════════════════════════════════════════════════════════════
+
+      if (path === "/api/visual/status" && method === "GET")
+        return visualStatus(env);
+
+      if (path === "/api/visual/index" && method === "POST")
+        return visualIndex(env, request);
+
+      if (path === "/api/visual/search" && method === "POST")
+        return visualSearch(env, request);
+
+
+
 
       // ==========================
       // HEALTH
@@ -2183,7 +2199,116 @@ Possible categories: Oli & Filter, Kampas Rem, Ban, Aki, Lampu, Busi, Bearing, R
     return json({ error: "AI gagal memproses gambar" }, 500);
   }
 }
+// ════════════════════════════════════════════════════════════════
+// VISUAL SEARCH
+// ════════════════════════════════════════════════════════════════
 
+async function visualStatus(env) {
+  try {
+    const stats = await env.VECTORIZE.describe();
+    return json({
+      indexed:    stats.vectorsCount ?? 0,
+      dimensions: stats.dimensions,
+      metric:     stats.metric,
+    });
+  } catch(e) {
+    return json({ error: String(e) }, 500);
+  }
+}
+
+async function visualIndex(env, request) {
+  let body;
+  try { body = await request.json(); }
+  catch(e) { return json({ error: "Body tidak valid" }, 400); }
+
+  const products = body?.products;
+  if (!products?.length) return json({ error: "products kosong" }, 400);
+
+  let ok = 0, fail = 0;
+  const vectors = [];
+
+  for (const p of products) {
+    try {
+      // 1. Fetch gambar produk dari URL
+      const imgResp = await fetch(p.foto, {
+        cf: { cacheEverything: true, cacheTtl: 86400 }
+      });
+      if (!imgResp.ok) throw new Error(`Fetch gagal: ${imgResp.status}`);
+      const imgArr = [...new Uint8Array(await imgResp.arrayBuffer())];
+
+      // 2. Vision model → deskripsi teks spare part
+      const vision = await env.AI.run("@cf/unum/uform-gen2-qwen-500m", {
+        image:      imgArr,
+        prompt:     "Describe this motorcycle spare part or accessory: part name, type, shape, color, material, brand, visible numbers or codes.",
+        max_tokens: 150,
+      });
+      const description = (vision.description || "").trim();
+      if (!description) throw new Error("Deskripsi kosong");
+
+      // 3. Text embedding → vektor 768 dim
+      const emb = await env.AI.run("@cf/baai/bge-base-en-v1.5", {
+        text: [description],
+      });
+
+      vectors.push({
+        id:       String(p.id),
+        values:   emb.data[0],
+        metadata: { description, foto: p.foto },
+      });
+      ok++;
+    } catch(e) {
+      fail++;
+    }
+  }
+
+  // Batch upsert ke Vectorize
+  if (vectors.length > 0) {
+    await env.VECTORIZE.upsert(vectors);
+  }
+
+  return json({ ok, fail });
+}
+
+async function visualSearch(env, request) {
+  let body;
+  try { body = await request.json(); }
+  catch(e) { return json({ error: "Body tidak valid" }, 400); }
+
+  const { image_base64 } = body;
+  if (!image_base64) return json({ error: "image_base64 diperlukan" }, 400);
+
+  // 1. Decode base64 foto user → array
+  const binary = atob(image_base64);
+  const imgArr = new Array(binary.length);
+  for (let i = 0; i < binary.length; i++) imgArr[i] = binary.charCodeAt(i);
+
+  // 2. Vision → deskripsi
+  const vision = await env.AI.run("@cf/unum/uform-gen2-qwen-500m", {
+    image:      imgArr,
+    prompt:     "Describe this motorcycle spare part or accessory: part name, type, shape, color, material, brand, visible numbers or codes.",
+    max_tokens: 150,
+  });
+  const description = (vision.description || "").trim();
+  if (!description) return json({ error: "Tidak bisa menganalisis gambar" }, 422);
+
+  // 3. Embed deskripsi → vektor 768 dim
+  const emb = await env.AI.run("@cf/baai/bge-base-en-v1.5", {
+    text: [description],
+  });
+
+  // 4. Query Vectorize
+  const matches = await env.VECTORIZE.query(emb.data[0], {
+    topK:           50,
+    returnMetadata: true,
+  });
+
+  const results = (matches.matches || []).map(m => ({
+    id:    m.id,
+    score: parseFloat(m.score.toFixed(4)),
+  }));
+
+  return json({ query_description: description, results });
+}
 //////////////////////////////
 // END OF FILE
 //////////////////////////////
