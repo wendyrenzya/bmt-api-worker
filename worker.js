@@ -2215,45 +2215,48 @@ async function visualStatus(env) {
   }
 }
 
-// CLIP model: clip-vit-large-patch14 → 768 dimensi (sesuai Vectorize index)
-const HF_CLIP_URL = "https://api-inference.huggingface.co/models/openai/clip-vit-large-patch14";
+// CLIP image feature extraction — 768 dim, sesuai Vectorize index
+// Endpoint: pipeline/feature-extraction (bukan /models/)
+const HF_CLIP_URL = "https://api-inference.huggingface.co/pipeline/feature-extraction/openai/clip-vit-large-patch14";
 
 async function clipEmbedImage(hfToken, input) {
-  let b64;
+  // Ambil raw bytes gambar
+  let imageBytes;
   if (input.startsWith("http")) {
     const imgResp = await fetch(input, {
       cf: { cacheEverything: true, cacheTtl: 86400 }
     });
     if (!imgResp.ok) throw new Error(`Fetch gambar gagal: ${imgResp.status}`);
-    const buf  = await imgResp.arrayBuffer();
-    const bytes = new Uint8Array(buf);
-    let str = "";
-    for (let i = 0; i < bytes.length; i++) str += String.fromCharCode(bytes[i]);
-    const mime = imgResp.headers.get("content-type") || "image/jpeg";
-    b64 = `data:${mime};base64,${btoa(str)}`;
+    imageBytes = new Uint8Array(await imgResp.arrayBuffer());
   } else {
-    b64 = input; // sudah base64 dataURL dari browser
+    // base64 dataURL dari browser → strip prefix → decode
+    const base64 = input.includes(",") ? input.split(",")[1] : input;
+    const bin = atob(base64);
+    imageBytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) imageBytes[i] = bin.charCodeAt(i);
   }
 
+  // Kirim sebagai binary (application/octet-stream) — format yang benar untuk HF image embedding
   const resp = await fetch(HF_CLIP_URL, {
     method: "POST",
     headers: {
       "Authorization":    `Bearer ${hfToken}`,
-      "Content-Type":     "application/json",
+      "Content-Type":     "application/octet-stream",
       "X-Wait-For-Model": "true",
     },
-    body: JSON.stringify({ inputs: b64 }),
+    body: imageBytes,
   });
 
   if (!resp.ok) {
     const err = await resp.text();
-    throw new Error(`HF CLIP error ${resp.status}: ${err}`);
+    throw new Error(`HF CLIP error ${resp.status}: ${err.slice(0, 200)}`);
   }
 
   const data = await resp.json();
+  // Response bisa berupa: [embedding] atau [[embedding]]
   if (Array.isArray(data) && Array.isArray(data[0])) return data[0];
-  if (Array.isArray(data)) return data;
-  throw new Error("Format response HF tidak dikenali");
+  if (Array.isArray(data) && typeof data[0] === "number") return data;
+  throw new Error("Format response HF tidak dikenali: " + JSON.stringify(data).slice(0, 100));
 }
 
 // Index semua produk (dipakai cron + manual)
