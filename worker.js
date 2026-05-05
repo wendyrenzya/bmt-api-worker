@@ -65,6 +65,12 @@ if (path === "/api/absensi" && method === "GET")
 
       if (path === "/api/kategori" && method === "GET")
         return listKategori(env);
+
+      // ==========================
+      // IMAGE SEARCH (AI VISUAL)
+      // ==========================
+      if (path === "/api/image-search" && method === "POST")
+        return handleImageSearch(request, env);
       // ==========================
       // SERVIS (FINAL ORDER FIX)
       // ==========================
@@ -2115,6 +2121,63 @@ async function handleGetStokKeluar(request, env) {
   } catch (err) {
     console.error("handleGetStokKeluar:", err);
     return json({ error: "Internal server error", detail: err.message }, 500);
+  }
+}
+
+
+// ======================================================
+// IMAGE SEARCH — Cloudflare Workers AI (Llama 3.2 Vision)
+// SETUP: Workers → Settings → Bindings → Add → AI → name: AI
+// ======================================================
+async function handleImageSearch(request, env) {
+  const { image_base64 } = await request.json().catch(() => ({}));
+
+  if (!image_base64 || !image_base64.startsWith("data:image")) {
+    return json({ error: "image_base64 tidak valid" }, 400);
+  }
+
+  const base64Data = image_base64.split(",")[1];
+  if (!base64Data || base64Data.length > 5_500_000) {
+    return json({ error: "Gambar terlalu besar, max 4MB" }, 413);
+  }
+
+  // Konversi base64 → array of bytes (format Workers AI)
+  const binaryStr = atob(base64Data);
+  const bytes = new Uint8Array(binaryStr.length);
+  for (let i = 0; i < binaryStr.length; i++) {
+    bytes[i] = binaryStr.charCodeAt(i);
+  }
+
+  const prompt = `Kamu adalah asisten pengenalan produk otomotif toko spare part.
+Lihat foto dan identifikasi produknya. Jawab HANYA JSON tanpa markdown:
+{"keywords":["kata1","kata2"],"kategori":"nama kategori","deskripsi":"deskripsi singkat 1 kalimat","tags":["tag1","tag2"]}
+Kategori yang mungkin: Oli & Filter, Kampas Rem, Ban, Aki, Lampu, Busi, Bearing, Rantai, Karburator, Gasket, Suku Cadang.`;
+
+  try {
+    const response = await env.AI.run(
+      "@cf/meta/llama-3.2-11b-vision-instruct",
+      { prompt, image: [...bytes], max_tokens: 300 }
+    );
+
+    const rawText = (response.response || "").trim();
+    const clean   = rawText.replace(/```json|```/g, "").trim();
+    const match   = clean.match(/\{[\s\S]*\}/);
+    const jsonStr  = match ? match[0] : clean;
+
+    let result;
+    try {
+      result = JSON.parse(jsonStr);
+    } catch {
+      const words = clean.toLowerCase()
+        .replace(/[^a-z0-9\s]/g, " ")
+        .split(/\s+/).filter(w => w.length > 2).slice(0, 8);
+      result = { keywords: words, kategori: "Suku Cadang", deskripsi: clean.slice(0, 80), tags: words.slice(0, 5) };
+    }
+
+    return json(result);
+  } catch (err) {
+    console.error("Workers AI error:", err);
+    return json({ error: "AI gagal memproses gambar" }, 500);
   }
 }
 
