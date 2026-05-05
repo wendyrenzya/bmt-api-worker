@@ -2208,25 +2208,25 @@ Possible categories: Oli & Filter, Kampas Rem, Ban, Aki, Lampu, Busi, Bearing, R
 
 async function visualStatus(env) {
   try {
+    // describe() kadang tidak akurat — query dummy untuk verifikasi
     const stats = await env.VECTORIZE.describe();
-    return json({ indexed: stats.vectorsCount ?? 0 });
+    // Coba query dengan dummy vector untuk crosscheck
+    const dummy = new Array(768).fill(0.1);
+    const test  = await env.VECTORIZE.query(dummy, { topK: 1 });
+    return json({
+      indexed:       stats.vectorsCount ?? 0,
+      query_working: (test.matches?.length ?? 0) > 0,
+    });
   } catch(e) {
     return json({ error: String(e) }, 500);
   }
 }
 
 // Jina CLIP v1 → 768 dim (sesuai Vectorize index)
-// Gratis, support image embedding via URL atau base64
 const JINA_CLIP_URL = "https://api.jina.ai/v1/embeddings";
 
-async function clipEmbedImage(jinaToken, input) {
-  // Siapkan input — bisa URL atau base64
-  const inputObj = input.startsWith("http")
-    ? { image: input }                          // URL langsung
-    : { image: input.includes(",")             // base64 dataURL
-        ? input.split(",")[1]                  // strip "data:...;base64,"
-        : input };
-
+// Embed dari base64 atau teks
+async function jinaEmbed(jinaToken, inputObj) {
   const resp = await fetch(JINA_CLIP_URL, {
     method: "POST",
     headers: {
@@ -2241,18 +2241,54 @@ async function clipEmbedImage(jinaToken, input) {
       input:          [inputObj],
     }),
   });
-
   if (!resp.ok) {
     const err = await resp.text();
-    throw new Error(`Jina CLIP error ${resp.status}: ${err.slice(0, 300)}`);
+    throw new Error(`Jina error ${resp.status}: ${err.slice(0, 200)}`);
   }
-
   const data = await resp.json();
-  const embedding = data?.data?.[0]?.embedding;
-  if (!Array.isArray(embedding)) {
-    throw new Error("Format Jina tidak dikenali: " + JSON.stringify(data).slice(0, 100));
+  const emb  = data?.data?.[0]?.embedding;
+  if (!Array.isArray(emb)) throw new Error("Format Jina tidak dikenali");
+  return emb;
+}
+
+// Fetch foto dari URL → base64 string (tanpa prefix data:...)
+async function fetchImageBase64(url) {
+  const resp = await fetch(url, {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1)",
+      "Referer":    new URL(url).origin,
+    },
+    cf: { cacheEverything: true, cacheTtl: 86400 },
+  });
+  if (!resp.ok) throw new Error(`Fetch gagal: ${resp.status}`);
+  const buf  = await resp.arrayBuffer();
+  const bytes = new Uint8Array(buf);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+
+// Embed gambar: coba fetch dulu → base64, fallback ke URL langsung
+async function clipEmbedImage(jinaToken, input) {
+  if (input.startsWith("http")) {
+    // Coba fetch → base64 dulu
+    try {
+      const b64 = await fetchImageBase64(input);
+      return await jinaEmbed(jinaToken, { image: b64 });
+    } catch(e) {
+      // Fallback: kirim URL langsung ke Jina
+      return await jinaEmbed(jinaToken, { image: input });
+    }
+  } else {
+    // base64 dataURL dari browser
+    const b64 = input.includes(",") ? input.split(",")[1] : input;
+    return await jinaEmbed(jinaToken, { image: b64 });
   }
-  return embedding;
+}
+
+// Embed teks produk sebagai fallback jika foto benar-benar tidak bisa
+async function clipEmbedText(jinaToken, text) {
+  return await jinaEmbed(jinaToken, { text });
 }
 
 // Index semua produk (dipakai cron + manual)
@@ -2261,8 +2297,7 @@ async function visualIndexAll(env) {
   if (!jinaToken) throw new Error("JINA_TOKEN tidak ditemukan");
 
   const { results: products } = await env.BMT_DB.prepare(
-    `SELECT id, nama, foto FROM barang
-     WHERE foto IS NOT NULL AND foto != '' AND foto != 'null'`
+    `SELECT id, nama, kategori, merek, alias, foto FROM barang`
   ).all();
 
   if (!products?.length) return { ok: 0, fail: 0, total: 0 };
@@ -2271,11 +2306,29 @@ async function visualIndexAll(env) {
 
   for (const p of products) {
     try {
-      const embedding = await clipEmbedImage(jinaToken, p.foto);
+      let embedding;
+      const hasFoto = p.foto && p.foto !== "" && p.foto !== "null";
+
+      if (hasFoto) {
+        try {
+          embedding = await clipEmbedImage(jinaToken, p.foto);
+        } catch(e) {
+          // Foto gagal total → fallback ke teks
+          const teks = [p.nama, p.kategori, p.merek, p.alias]
+            .filter(Boolean).join(" ");
+          embedding = await clipEmbedText(jinaToken, teks);
+        }
+      } else {
+        // Tidak ada foto → embed teks
+        const teks = [p.nama, p.kategori, p.merek, p.alias]
+          .filter(Boolean).join(" ");
+        embedding = await clipEmbedText(jinaToken, teks);
+      }
+
       vectors.push({
         id:       String(p.id),
         values:   embedding,
-        metadata: { nama: p.nama, foto: p.foto },
+        metadata: { nama: p.nama, foto: p.foto || "" },
       });
       ok++;
     } catch(e) {
@@ -2323,11 +2376,14 @@ async function visualSearch(env, request) {
       returnMetadata: true,
     });
 
-    const results = (matches.matches || []).map(m => ({
-      id:    m.id,
-      score: parseFloat(m.score.toFixed(4)),
-    }));
+    const results = (matches.matches || [])
+      .filter(m => m.score >= 0.60)   // hanya tampil jika benar-benar mirip
+      .map(m => ({
+        id:    m.id,
+        score: parseFloat(m.score.toFixed(4)),
+      }));
 
+    // Kalau tidak ada yang cukup mirip, kembalikan array kosong
     return json({ results });
   } catch(e) {
     return json({ error: String(e) }, 500);
