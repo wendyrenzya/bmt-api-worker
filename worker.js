@@ -2141,39 +2141,28 @@ async function handleImageSearch(request, env) {
     return json({ error: "Gambar terlalu besar, max 4MB" }, 413);
   }
 
-  // Ambil base64 untuk dikirim via image_url
-  const mediaTypeMatch = image_base64.match(/data:(image\/\w+);base64/);
-  const mediaType = mediaTypeMatch ? mediaTypeMatch[1] : "image/jpeg";
+  // Konversi base64 → array of bytes (format LLaVA)
+  const binaryStr = atob(base64Data);
+  const bytes = new Uint8Array(binaryStr.length);
+  for (let i = 0; i < binaryStr.length; i++) {
+    bytes[i] = binaryStr.charCodeAt(i);
+  }
 
-  const systemPrompt = `Kamu adalah asisten pengenalan produk otomotif toko spare part.
-Lihat foto dan identifikasi produknya. Jawab HANYA JSON tanpa markdown:
-{"keywords":["kata1","kata2"],"kategori":"nama kategori","deskripsi":"deskripsi singkat 1 kalimat","tags":["tag1","tag2"]}
-Kategori yang mungkin: Oli & Filter, Kampas Rem, Ban, Aki, Lampu, Busi, Bearing, Rantai, Karburator, Gasket, Suku Cadang.`;
+  const prompt = `Identify this automotive spare part product. Reply ONLY in this JSON format, no markdown:
+{"keywords":["word1","word2"],"kategori":"category name","deskripsi":"short description in Indonesian","tags":["tag1","tag2"]}
+Possible categories: Oli & Filter, Kampas Rem, Ban, Aki, Lampu, Busi, Bearing, Rantai, Karburator, Gasket, Suku Cadang.`;
 
   try {
     const response = await env.AI.run(
-      "@cf/meta/llama-3.2-11b-vision-instruct",
+      "@cf/llava-hf/llava-1.5-7b-hf",
       {
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "image_url",
-                image_url: { url: image_base64 }
-              },
-              {
-                type: "text",
-                text: systemPrompt
-              }
-            ]
-          }
-        ],
+        image: [...bytes],
+        prompt,
         max_tokens: 300
       }
     );
 
-    const rawText = (response.response || "").trim();
+    const rawText = (response.description || response.response || "").trim();
     const clean   = rawText.replace(/```json|```/g, "").trim();
     const match   = clean.match(/\{[\s\S]*\}/);
     const jsonStr  = match ? match[0] : clean;
