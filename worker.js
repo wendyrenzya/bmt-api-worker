@@ -2215,56 +2215,50 @@ async function visualStatus(env) {
   }
 }
 
-// sentence-transformers/clip-ViT-L-14 → 768 dim, support image feature extraction
-const HF_CLIP_URL = "https://api-inference.huggingface.co/models/sentence-transformers/clip-ViT-L-14";
+// Jina CLIP v1 → 768 dim (sesuai Vectorize index)
+// Gratis, support image embedding via URL atau base64
+const JINA_CLIP_URL = "https://api.jina.ai/v1/embeddings";
 
-async function clipEmbedImage(hfToken, input) {
-  // Ambil raw bytes gambar
-  let imageBytes, mimeType;
+async function clipEmbedImage(jinaToken, input) {
+  // Siapkan input — bisa URL atau base64
+  const inputObj = input.startsWith("http")
+    ? { image: input }                          // URL langsung
+    : { image: input.includes(",")             // base64 dataURL
+        ? input.split(",")[1]                  // strip "data:...;base64,"
+        : input };
 
-  if (input.startsWith("http")) {
-    const imgResp = await fetch(input, {
-      cf: { cacheEverything: true, cacheTtl: 86400 }
-    });
-    if (!imgResp.ok) throw new Error(`Fetch gambar gagal: ${imgResp.status}`);
-    imageBytes = new Uint8Array(await imgResp.arrayBuffer());
-    mimeType   = imgResp.headers.get("content-type") || "image/jpeg";
-  } else {
-    // base64 dataURL dari browser
-    const base64 = input.includes(",") ? input.split(",")[1] : input;
-    mimeType     = input.includes("data:") ? input.split(";")[0].split(":")[1] : "image/jpeg";
-    const bin    = atob(base64);
-    imageBytes   = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) imageBytes[i] = bin.charCodeAt(i);
-  }
-
-  // Kirim raw bytes dengan Content-Type mime gambar
-  const resp = await fetch(HF_CLIP_URL, {
+  const resp = await fetch(JINA_CLIP_URL, {
     method: "POST",
     headers: {
-      "Authorization":    `Bearer ${hfToken}`,
-      "Content-Type":     mimeType,
-      "X-Wait-For-Model": "true",
+      "Authorization": `Bearer ${jinaToken}`,
+      "Content-Type":  "application/json",
+      "Accept":        "application/json",
     },
-    body: imageBytes,
+    body: JSON.stringify({
+      model:          "jina-clip-v1",
+      normalized:     true,
+      embedding_type: "float",
+      input:          [inputObj],
+    }),
   });
 
   if (!resp.ok) {
     const err = await resp.text();
-    throw new Error(`HF CLIP error ${resp.status}: ${err.slice(0, 300)}`);
+    throw new Error(`Jina CLIP error ${resp.status}: ${err.slice(0, 300)}`);
   }
 
   const data = await resp.json();
-  // Response: [embedding] atau [[embedding]]
-  if (Array.isArray(data) && Array.isArray(data[0])) return data[0];
-  if (Array.isArray(data) && typeof data[0] === "number") return data;
-  throw new Error("Format HF tidak dikenali: " + JSON.stringify(data).slice(0, 100));
+  const embedding = data?.data?.[0]?.embedding;
+  if (!Array.isArray(embedding)) {
+    throw new Error("Format Jina tidak dikenali: " + JSON.stringify(data).slice(0, 100));
+  }
+  return embedding;
 }
 
 // Index semua produk (dipakai cron + manual)
 async function visualIndexAll(env) {
-  const hfToken = env.HF_TOKEN;
-  if (!hfToken) throw new Error("HF_TOKEN tidak ditemukan");
+  const jinaToken = env.JINA_TOKEN;
+  if (!jinaToken) throw new Error("JINA_TOKEN tidak ditemukan");
 
   const { results: products } = await env.BMT_DB.prepare(
     `SELECT id, nama, foto FROM barang
@@ -2277,7 +2271,7 @@ async function visualIndexAll(env) {
 
   for (const p of products) {
     try {
-      const embedding = await clipEmbedImage(hfToken, p.foto);
+      const embedding = await clipEmbedImage(jinaToken, p.foto);
       vectors.push({
         id:       String(p.id),
         values:   embedding,
@@ -2311,8 +2305,8 @@ async function visualIndexManual(env) {
 
 // Search: foto user → CLIP embedding → query Vectorize
 async function visualSearch(env, request) {
-  const hfToken = env.HF_TOKEN;
-  if (!hfToken) return json({ error: "HF_TOKEN tidak ditemukan" }, 500);
+  const jinaToken = env.JINA_TOKEN;
+  if (!jinaToken) return json({ error: "JINA_TOKEN tidak ditemukan" }, 500);
 
   let body;
   try { body = await request.json(); }
@@ -2322,7 +2316,7 @@ async function visualSearch(env, request) {
   if (!image_base64) return json({ error: "image_base64 diperlukan" }, 400);
 
   try {
-    const queryVec = await clipEmbedImage(hfToken, image_base64);
+    const queryVec = await clipEmbedImage(jinaToken, image_base64);
 
     const matches = await env.VECTORIZE.query(queryVec, {
       topK:           50,
