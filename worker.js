@@ -286,6 +286,9 @@ if (path === "/api/stok_keluar" && method === "GET") return handleGetStokKeluar(
       if (path === "/api/visual/index" && method === "POST")
         return visualIndexManual(env);
 
+      if (path === "/api/visual/index/one" && method === "POST")
+        return visualIndexOne(env, request);
+
       if (path === "/api/visual/search" && method === "POST")
         return visualSearch(env, request);
 
@@ -2353,6 +2356,51 @@ async function visualIndexManual(env) {
     return json(result);
   } catch(e) {
     return json({ error: String(e) }, 500);
+  }
+}
+
+// Index SATU produk — POST /api/visual/index/one { id: "123" }
+async function visualIndexOne(env, request) {
+  const jinaToken = env.JINA_TOKEN;
+  if (!jinaToken) return json({ error: "JINA_TOKEN tidak ditemukan" }, 500);
+
+  let body;
+  try { body = await request.json(); }
+  catch(e) { return json({ error: "Body tidak valid" }, 400); }
+
+  const { id } = body;
+  if (!id) return json({ error: "id diperlukan" }, 400);
+
+  const p = await env.BMT_DB.prepare(
+    `SELECT id, nama, kategori, merek, alias, foto FROM barang WHERE id = ?`
+  ).bind(id).first();
+
+  if (!p) return json({ error: "Produk tidak ditemukan" }, 404);
+
+  try {
+    let embedding;
+    const hasFoto = p.foto && p.foto !== "" && p.foto !== "null";
+    if (hasFoto) {
+      try {
+        embedding = await clipEmbedImage(jinaToken, p.foto);
+      } catch(e) {
+        const teks = [p.nama, p.kategori, p.merek, p.alias].filter(Boolean).join(" ");
+        embedding  = await clipEmbedText(jinaToken, teks);
+      }
+    } else {
+      const teks = [p.nama, p.kategori, p.merek, p.alias].filter(Boolean).join(" ");
+      embedding  = await clipEmbedText(jinaToken, teks);
+    }
+
+    await env.VECTORIZE.upsert([{
+      id:       String(p.id),
+      values:   embedding,
+      metadata: { nama: p.nama, foto: p.foto || "" },
+    }]);
+
+    return json({ ok: true, id: p.id, nama: p.nama });
+  } catch(e) {
+    return json({ ok: false, id: p.id, error: String(e) });
   }
 }
 
