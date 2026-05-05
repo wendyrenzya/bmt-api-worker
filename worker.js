@@ -2141,14 +2141,11 @@ async function handleImageSearch(request, env) {
     return json({ error: "Gambar terlalu besar, max 4MB" }, 413);
   }
 
-  // Konversi base64 → array of bytes (format Workers AI)
-  const binaryStr = atob(base64Data);
-  const bytes = new Uint8Array(binaryStr.length);
-  for (let i = 0; i < binaryStr.length; i++) {
-    bytes[i] = binaryStr.charCodeAt(i);
-  }
+  // Ambil base64 untuk dikirim via image_url
+  const mediaTypeMatch = image_base64.match(/data:(image\/\w+);base64/);
+  const mediaType = mediaTypeMatch ? mediaTypeMatch[1] : "image/jpeg";
 
-  const prompt = `Kamu adalah asisten pengenalan produk otomotif toko spare part.
+  const systemPrompt = `Kamu adalah asisten pengenalan produk otomotif toko spare part.
 Lihat foto dan identifikasi produknya. Jawab HANYA JSON tanpa markdown:
 {"keywords":["kata1","kata2"],"kategori":"nama kategori","deskripsi":"deskripsi singkat 1 kalimat","tags":["tag1","tag2"]}
 Kategori yang mungkin: Oli & Filter, Kampas Rem, Ban, Aki, Lampu, Busi, Bearing, Rantai, Karburator, Gasket, Suku Cadang.`;
@@ -2156,7 +2153,24 @@ Kategori yang mungkin: Oli & Filter, Kampas Rem, Ban, Aki, Lampu, Busi, Bearing,
   try {
     const response = await env.AI.run(
       "@cf/meta/llama-3.2-11b-vision-instruct",
-      { prompt, image: [...bytes], max_tokens: 300 }
+      {
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "image_url",
+                image_url: { url: image_base64 }
+              },
+              {
+                type: "text",
+                text: systemPrompt
+              }
+            ]
+          }
+        ],
+        max_tokens: 300
+      }
     );
 
     const rawText = (response.response || "").trim();
