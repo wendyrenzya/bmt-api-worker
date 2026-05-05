@@ -293,6 +293,8 @@ if (path === "/api/stok_keluar" && method === "GET") return handleGetStokKeluar(
         return visualSearch(env, request);
 
 
+ if (path === "/api/visual/unindexed" && method === "GET")
+   return visualUnindexed(env);
 
 
       // ==========================
@@ -2434,6 +2436,48 @@ async function visualSearch(env, request) {
     // Kalau tidak ada yang cukup mirip, kembalikan array kosong
     return json({ results });
   } catch(e) {
+    return json({ error: String(e) }, 500);
+  }
+}
+async function visualUnindexed(env) {
+  try {
+    // 1. Ambil semua produk dari DB
+    const { results: products } = await env.BMT_DB.prepare(
+      `SELECT id, nama, kategori, merek, foto FROM barang ORDER BY nama ASC`
+    ).all();
+
+    if (!products?.length) {
+      return json({ total_products: 0, total_indexed: 0, total_unindexed: 0, unindexed: [] });
+    }
+
+    // 2. Batch-check ke Vectorize (max 100 per request)
+    const allIds    = products.map(p => String(p.id));
+    const indexedIds = new Set();
+    const BATCH     = 100;
+
+    for (let i = 0; i < allIds.length; i += BATCH) {
+      const chunk = allIds.slice(i, i + BATCH);
+      try {
+        const found = await env.VECTORIZE.getByIds(chunk);
+        for (const v of (found || [])) {
+          if (v?.id) indexedIds.add(String(v.id));
+        }
+      } catch (e) {
+        // chunk gagal → skip, anggap belum terindex
+        console.error(`Vectorize getByIds error (chunk ${i}):`, e);
+      }
+    }
+
+    // 3. Filter produk yang BELUM diindex
+    const unindexed = products.filter(p => !indexedIds.has(String(p.id)));
+
+    return json({
+      total_products:  products.length,
+      total_indexed:   indexedIds.size,
+      total_unindexed: unindexed.length,
+      unindexed,          // array produk {id, nama, kategori, merek, foto}
+    });
+  } catch (e) {
     return json({ error: String(e) }, 500);
   }
 }
