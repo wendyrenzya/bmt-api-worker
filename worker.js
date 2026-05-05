@@ -1,5 +1,8 @@
 export default {
-  async fetch(request, env) {
+async scheduled(event, env, ctx) {
+ctx.waitUntil(visualIndexAll(env));
+},
+async fetch(request, env) {
     const url = new URL(request.url);
     const path = url.pathname;
     const method = request.method.toUpperCase();
@@ -281,7 +284,7 @@ if (path === "/api/stok_keluar" && method === "GET") return handleGetStokKeluar(
         return visualStatus(env);
 
       if (path === "/api/visual/index" && method === "POST")
-        return visualIndex(env, request);
+        return visualIndexManual(env);
 
       if (path === "/api/visual/search" && method === "POST")
         return visualSearch(env, request);
@@ -2206,70 +2209,106 @@ Possible categories: Oli & Filter, Kampas Rem, Ban, Aki, Lampu, Busi, Bearing, R
 async function visualStatus(env) {
   try {
     const stats = await env.VECTORIZE.describe();
-    return json({
-      indexed:    stats.vectorsCount ?? 0,
-      dimensions: stats.dimensions,
-      metric:     stats.metric,
-    });
+    return json({ indexed: stats.vectorsCount ?? 0 });
   } catch(e) {
     return json({ error: String(e) }, 500);
   }
 }
 
-async function visualIndex(env, request) {
-  let body;
-  try { body = await request.json(); }
-  catch(e) { return json({ error: "Body tidak valid" }, 400); }
+// CLIP model: clip-vit-large-patch14 → 768 dimensi (sesuai Vectorize index)
+const HF_CLIP_URL = "https://api-inference.huggingface.co/models/openai/clip-vit-large-patch14";
 
-  const products = body?.products;
-  if (!products?.length) return json({ error: "products kosong" }, 400);
+async function clipEmbedImage(hfToken, input) {
+  let b64;
+  if (input.startsWith("http")) {
+    const imgResp = await fetch(input, {
+      cf: { cacheEverything: true, cacheTtl: 86400 }
+    });
+    if (!imgResp.ok) throw new Error(`Fetch gambar gagal: ${imgResp.status}`);
+    const buf  = await imgResp.arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    let str = "";
+    for (let i = 0; i < bytes.length; i++) str += String.fromCharCode(bytes[i]);
+    const mime = imgResp.headers.get("content-type") || "image/jpeg";
+    b64 = `data:${mime};base64,${btoa(str)}`;
+  } else {
+    b64 = input; // sudah base64 dataURL dari browser
+  }
 
-  let ok = 0, fail = 0;
-  const vectors = [];
+  const resp = await fetch(HF_CLIP_URL, {
+    method: "POST",
+    headers: {
+      "Authorization":    `Bearer ${hfToken}`,
+      "Content-Type":     "application/json",
+      "X-Wait-For-Model": "true",
+    },
+    body: JSON.stringify({ inputs: b64 }),
+  });
+
+  if (!resp.ok) {
+    const err = await resp.text();
+    throw new Error(`HF CLIP error ${resp.status}: ${err}`);
+  }
+
+  const data = await resp.json();
+  if (Array.isArray(data) && Array.isArray(data[0])) return data[0];
+  if (Array.isArray(data)) return data;
+  throw new Error("Format response HF tidak dikenali");
+}
+
+// Index semua produk (dipakai cron + manual)
+async function visualIndexAll(env) {
+  const hfToken = env.HF_TOKEN;
+  if (!hfToken) throw new Error("HF_TOKEN tidak ditemukan");
+
+  const { results: products } = await env.BMT_DB.prepare(
+    `SELECT id, nama, foto FROM barang
+     WHERE foto IS NOT NULL AND foto != '' AND foto != 'null'`
+  ).all();
+
+  if (!products?.length) return { ok: 0, fail: 0, total: 0 };
+
+  let ok = 0, fail = 0, vectors = [];
 
   for (const p of products) {
     try {
-      // 1. Fetch gambar produk dari URL
-      const imgResp = await fetch(p.foto, {
-        cf: { cacheEverything: true, cacheTtl: 86400 }
-      });
-      if (!imgResp.ok) throw new Error(`Fetch gagal: ${imgResp.status}`);
-      const imgArr = [...new Uint8Array(await imgResp.arrayBuffer())];
-
-      // 2. Vision model → deskripsi teks spare part
-      const vision = await env.AI.run("@cf/unum/uform-gen2-qwen-500m", {
-        image:      imgArr,
-        prompt:     "Describe this motorcycle spare part or accessory: part name, type, shape, color, material, brand, visible numbers or codes.",
-        max_tokens: 150,
-      });
-      const description = (vision.description || "").trim();
-      if (!description) throw new Error("Deskripsi kosong");
-
-      // 3. Text embedding → vektor 768 dim
-      const emb = await env.AI.run("@cf/baai/bge-base-en-v1.5", {
-        text: [description],
-      });
-
+      const embedding = await clipEmbedImage(hfToken, p.foto);
       vectors.push({
         id:       String(p.id),
-        values:   emb.data[0],
-        metadata: { description, foto: p.foto },
+        values:   embedding,
+        metadata: { nama: p.nama, foto: p.foto },
       });
       ok++;
     } catch(e) {
       fail++;
     }
+
+    if (vectors.length >= 20) {
+      await env.VECTORIZE.upsert(vectors);
+      vectors = [];
+    }
   }
 
-  // Batch upsert ke Vectorize
-  if (vectors.length > 0) {
-    await env.VECTORIZE.upsert(vectors);
-  }
+  if (vectors.length > 0) await env.VECTORIZE.upsert(vectors);
 
-  return json({ ok, fail });
+  return { ok, fail, total: products.length };
 }
 
+// Manual index via POST /api/visual/index
+async function visualIndexManual(env) {
+  try {
+    const result = await visualIndexAll(env);
+    return json(result);
+  } catch(e) {
+    return json({ error: String(e) }, 500);
+  }
+}
+
+// Search: foto user → CLIP embedding → query Vectorize
 async function visualSearch(env, request) {
+  const hfToken = env.HF_TOKEN;
+  if (!hfToken) return json({ error: "HF_TOKEN tidak ditemukan" }, 500);
+
   let body;
   try { body = await request.json(); }
   catch(e) { return json({ error: "Body tidak valid" }, 400); }
@@ -2277,37 +2316,23 @@ async function visualSearch(env, request) {
   const { image_base64 } = body;
   if (!image_base64) return json({ error: "image_base64 diperlukan" }, 400);
 
-  // 1. Decode base64 foto user → array
-  const binary = atob(image_base64);
-  const imgArr = new Array(binary.length);
-  for (let i = 0; i < binary.length; i++) imgArr[i] = binary.charCodeAt(i);
+  try {
+    const queryVec = await clipEmbedImage(hfToken, image_base64);
 
-  // 2. Vision → deskripsi
-  const vision = await env.AI.run("@cf/unum/uform-gen2-qwen-500m", {
-    image:      imgArr,
-    prompt:     "Describe this motorcycle spare part or accessory: part name, type, shape, color, material, brand, visible numbers or codes.",
-    max_tokens: 150,
-  });
-  const description = (vision.description || "").trim();
-  if (!description) return json({ error: "Tidak bisa menganalisis gambar" }, 422);
+    const matches = await env.VECTORIZE.query(queryVec, {
+      topK:           50,
+      returnMetadata: true,
+    });
 
-  // 3. Embed deskripsi → vektor 768 dim
-  const emb = await env.AI.run("@cf/baai/bge-base-en-v1.5", {
-    text: [description],
-  });
+    const results = (matches.matches || []).map(m => ({
+      id:    m.id,
+      score: parseFloat(m.score.toFixed(4)),
+    }));
 
-  // 4. Query Vectorize
-  const matches = await env.VECTORIZE.query(emb.data[0], {
-    topK:           50,
-    returnMetadata: true,
-  });
-
-  const results = (matches.matches || []).map(m => ({
-    id:    m.id,
-    score: parseFloat(m.score.toFixed(4)),
-  }));
-
-  return json({ query_description: description, results });
+    return json({ results });
+  } catch(e) {
+    return json({ error: String(e) }, 500);
+  }
 }
 //////////////////////////////
 // END OF FILE

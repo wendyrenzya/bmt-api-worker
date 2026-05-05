@@ -16,3 +16,7 @@ binding = "AI"
 [[vectorize]]
 binding = "VECTORIZE"
 index_name = "produk-index"
+
+# Cron: index otomatis tiap malam jam 02.00 UTC (09.00 WIB)
+[triggers]
+crons = ["0 2 * * *"]
