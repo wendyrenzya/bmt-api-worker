@@ -2270,6 +2270,14 @@ async function clipEmbedText(env, text) {
   return data.embedding;
 }
 
+// ── Validasi embedding: pastikan flat array of finite numbers ──
+function validateEmbedding(emb) {
+  if (!Array.isArray(emb) || emb.length === 0) return null;
+  const values = emb.map(Number);
+  if (values.some(v => !isFinite(v))) return null;
+  return values;
+}
+
 // Index semua produk (dipakai cron + manual)
 async function visualIndexAll(env) {
   const { results: products } = await env.BMT_DB.prepare(
@@ -2300,9 +2308,13 @@ async function visualIndexAll(env) {
       // Pastikan embedding flat array of numbers (bukan nested)
       const flatEmb = Array.isArray(embedding[0]) ? embedding[0] : embedding;
 
+      // Validasi: tolak jika ada NaN / Infinity / null
+      const values = validateEmbedding(flatEmb);
+      if (!values) { fail++; continue; }
+
       vectors.push({
         id:       String(p.id),
-        values:   flatEmb.map(Number),
+        values,
         metadata: { nama: p.nama, foto: p.foto || "" },
       });
       ok++;
@@ -2310,13 +2322,20 @@ async function visualIndexAll(env) {
       fail++;
     }
 
+    // Upsert per-vektor agar satu produk rusak tidak menggagalkan batch
     if (vectors.length >= 20) {
-      await env.VECTORIZE.upsert(vectors);
+      for (const vec of vectors) {
+        try { await env.VECTORIZE.upsert([vec]); }
+        catch(e) { ok--; fail++; }
+      }
       vectors = [];
     }
   }
 
-  if (vectors.length > 0) await env.VECTORIZE.upsert(vectors);
+  for (const vec of vectors) {
+    try { await env.VECTORIZE.upsert([vec]); }
+    catch(e) { ok--; fail++; }
+  }
   return { ok, fail, total: products.length };
 }
 
@@ -2361,9 +2380,14 @@ async function visualIndexOne(env, request) {
     }
 
     const flatEmb = Array.isArray(embedding[0]) ? embedding[0] : embedding;
+
+    // Validasi: tolak jika ada NaN / Infinity / null
+    const values = validateEmbedding(flatEmb);
+    if (!values) return json({ ok: false, id: p.id, error: "Embedding tidak valid (NaN/null)" });
+
     await env.VECTORIZE.upsert([{
       id:       String(p.id),
-      values:   flatEmb.map(Number),
+      values,
       metadata: { nama: p.nama, foto: p.foto || "" },
     }]);
 
