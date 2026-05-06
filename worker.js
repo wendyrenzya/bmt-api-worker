@@ -2225,73 +2225,49 @@ async function visualStatus(env) {
   }
 }
 
-// ── Hugging Face CLIP via sentence-transformers (512 dim) ──
-// Model: sentence-transformers/clip-ViT-B-32
-// Image  → kirim binary bytes via /pipeline/feature-extraction
-// Teks   → kirim JSON { inputs: "teks" } ke endpoint yg sama
-// Token  → env.HF_TOKEN (Cloudflare Workers Secret)
+// ── CLIP via HF Space (wendyrenzya/bigmotor) ──
+// openai/clip-vit-base-patch32, 512 dim, gratis
+// POST https://wendyrenzya-bigmotor.hf.space/embed
+// Body: { image_url } atau { image_base64 } atau { text }
 
-const HF_IMG_URL  = "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/clip-ViT-B-32";
-const HF_TEXT_URL = "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/clip-ViT-B-32";
+const CLIP_URL = "https://wendyrenzya-bigmotor.hf.space/embed";
 
 // Embed gambar → vektor 512 dim
 async function clipEmbedImage(env, input) {
-  let imgBytes;
+  const body = input.startsWith("http")
+    ? { image_url: input }
+    : { image_base64: input };
 
-  if (input.startsWith("http")) {
-    // Fetch foto dari URL publik (ImgBB, dll)
-    const r = await fetch(input, {
-      headers: { "User-Agent": "Mozilla/5.0" },
-      cf: { cacheEverything: true, cacheTtl: 86400 },
-    });
-    if (!r.ok) throw new Error(`Fetch foto gagal: ${r.status}`);
-    imgBytes = await r.arrayBuffer();
-  } else {
-    // base64 dataURL dari browser
-    const b64 = input.includes(",") ? input.split(",")[1] : input;
-    const bin = atob(b64);
-    const arr = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
-    imgBytes = arr.buffer;
-  }
-
-  const resp = await fetch(HF_IMG_URL, {
+  const resp = await fetch(CLIP_URL, {
     method: "POST",
-    headers: {
-      "Authorization": `Bearer ${env.HF_TOKEN}`,
-      "Content-Type": "application/octet-stream",
-    },
-    body: imgBytes,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
   });
 
   if (!resp.ok) {
     const err = await resp.text();
-    throw new Error(`HF image error ${resp.status}: ${err.slice(0, 200)}`);
+    throw new Error(`CLIP error ${resp.status}: ${err.slice(0, 200)}`);
   }
 
   const data = await resp.json();
-  // Response bisa flat array atau nested [[...]]
-  return Array.isArray(data[0]) ? data[0] : data;
+  return data.embedding;
 }
 
 // Embed teks → vektor 512 dim
 async function clipEmbedText(env, text) {
-  const resp = await fetch(HF_TEXT_URL, {
+  const resp = await fetch(CLIP_URL, {
     method: "POST",
-    headers: {
-      "Authorization": `Bearer ${env.HF_TOKEN}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ inputs: text }),
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
   });
 
   if (!resp.ok) {
     const err = await resp.text();
-    throw new Error(`HF text error ${resp.status}: ${err.slice(0, 200)}`);
+    throw new Error(`CLIP text error ${resp.status}: ${err.slice(0, 200)}`);
   }
 
   const data = await resp.json();
-  return Array.isArray(data[0]) ? data[0] : data;
+  return data.embedding;
 }
 
 // Index semua produk (dipakai cron + manual)
