@@ -2225,41 +2225,67 @@ async function visualStatus(env) {
   }
 }
 
-// ── CF Workers AI CLIP (512 dim, gratis, tanpa API key eksternal) ──
+// ── Hugging Face CLIP (openai/clip-vit-base-patch32, 512 dim) ──
+// Token disimpan di env.HF_TOKEN (Cloudflare Workers Secret)
 
-// Konversi URL foto → bytes
-async function fetchImageBytes(url) {
-  const resp = await fetch(url, {
-    headers: { "User-Agent": "Mozilla/5.0" },
-    cf: { cacheEverything: true, cacheTtl: 86400 },
-  });
-  if (!resp.ok) throw new Error(`Fetch gagal: ${resp.status}`);
-  const buf = await resp.arrayBuffer();
-  return [...new Uint8Array(buf)];
-}
+const HF_MODEL = "openai/clip-vit-base-patch32";
 
-// Konversi base64/dataURL → bytes
-function base64ToBytes(input) {
-  const b64 = input.includes(",") ? input.split(",")[1] : input;
-  const bin = atob(b64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return [...bytes];
-}
-
-// Embed gambar → vektor 512 dim
+// Embed gambar dari URL publik → vektor 512 dim
 async function clipEmbedImage(env, input) {
-  const bytes = input.startsWith("http")
-    ? await fetchImageBytes(input)
-    : base64ToBytes(input);
-  const result = await env.AI.run("@cf/openai/clip-vit-base-patch32", { image: bytes });
-  return result.data[0];
+  let body, headers = {
+    "Authorization": `Bearer ${env.HF_TOKEN}`,
+  };
+
+  if (input.startsWith("http")) {
+    // URL publik → kirim JSON { url }
+    headers["Content-Type"] = "application/json";
+    body = JSON.stringify({ inputs: { image: input } });
+  } else {
+    // base64 dataURL → konversi ke binary blob
+    const b64  = input.includes(",") ? input.split(",")[1] : input;
+    const bin  = atob(b64);
+    const arr  = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    headers["Content-Type"] = "application/octet-stream";
+    body = arr.buffer;
+  }
+
+  const resp = await fetch(
+    `https://api-inference.huggingface.co/pipeline/feature-extraction/${HF_MODEL}`,
+    { method: "POST", headers, body }
+  );
+
+  if (!resp.ok) {
+    const err = await resp.text();
+    throw new Error(`HF error ${resp.status}: ${err.slice(0, 200)}`);
+  }
+
+  const data = await resp.json();
+  // HF feature-extraction mengembalikan array flat atau nested
+  return Array.isArray(data[0]) ? data[0] : data;
 }
 
 // Embed teks → vektor 512 dim
 async function clipEmbedText(env, text) {
-  const result = await env.AI.run("@cf/openai/clip-vit-base-patch32", { text: [text] });
-  return result.data[0];
+  const resp = await fetch(
+    `https://api-inference.huggingface.co/pipeline/feature-extraction/${HF_MODEL}`,
+    {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${env.HF_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ inputs: text }),
+    }
+  );
+
+  if (!resp.ok) {
+    const err = await resp.text();
+    throw new Error(`HF error ${resp.status}: ${err.slice(0, 200)}`);
+  }
+
+  const data = await resp.json();
+  return Array.isArray(data[0]) ? data[0] : data;
 }
 
 // Index semua produk (dipakai cron + manual)
