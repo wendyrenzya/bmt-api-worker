@@ -1,6 +1,6 @@
 export default {
 async scheduled(event, env, ctx) {
-  ctx.waitUntil(pingHFSpace());
+ctx.waitUntil(visualIndexAll(env));
 },
 async fetch(request, env) {
     const url = new URL(request.url);
@@ -2230,16 +2230,6 @@ async function visualStatus(env) {
 // POST https://wendyrenzya-bigmotor.hf.space/embed
 // Body: { image_url } atau { image_base64 } atau { text }
 
-// ── Ping HF Space agar tidak sleep ──
-async function pingHFSpace() {
-  try {
-    const res = await fetch("https://wendyrenzya-bigmotor.hf.space/");
-    console.log(`[HF-PING] status=${res.status}`);
-  } catch(e) {
-    console.error(`[HF-PING] failed: ${e}`);
-  }
-}
-
 const CLIP_URL = "https://wendyrenzya-bigmotor.hf.space/embed";
 
 // Embed gambar → vektor 512 dim
@@ -2299,13 +2289,6 @@ async function clipEmbedWithRetry(fn, maxRetry = 3, delayMs = 1000) {
   return null;
 }
 
-// ── Flatten embedding: handle [[[ ]]] → [ ] secara rekursif ──
-function flattenEmbedding(raw) {
-  let flat = raw;
-  while (Array.isArray(flat) && Array.isArray(flat[0])) flat = flat[0];
-  return flat;
-}
-
 // ── Validasi embedding: pastikan flat array of finite numbers ──
 function validateEmbedding(emb) {
   if (!Array.isArray(emb) || emb.length === 0) return null;
@@ -2337,7 +2320,7 @@ async function visualIndexAll(env) {
       if (hasFoto) {
         const raw = await clipEmbedWithRetry(() => clipEmbedImage(env, p.foto));
         if (raw) {
-          const flat = flattenEmbedding(raw);
+          const flat = Array.isArray(raw?.[0]) ? raw[0] : raw;
           const v = validateEmbedding(flat);
           if (v?.length === 512) values = v;
         }
@@ -2347,7 +2330,7 @@ async function visualIndexAll(env) {
       if (!values) {
         const raw = await clipEmbedWithRetry(() => clipEmbedText(env, teks));
         if (raw) {
-          const flat = flattenEmbedding(raw);
+          const flat = Array.isArray(raw?.[0]) ? raw[0] : raw;
           const v = validateEmbedding(flat);
           if (v?.length === 512) values = v;
         }
@@ -2420,7 +2403,7 @@ async function visualIndexOne(env, request) {
     if (hasFoto) {
       const raw = await clipEmbedWithRetry(() => clipEmbedImage(env, p.foto));
       if (raw) {
-        const flat = flattenEmbedding(raw);
+        const flat = Array.isArray(raw?.[0]) ? raw[0] : raw;
         const v = validateEmbedding(flat);
         if (v?.length === 512) values = v;
       }
@@ -2429,7 +2412,7 @@ async function visualIndexOne(env, request) {
     if (!values) {
       const raw = await clipEmbedWithRetry(() => clipEmbedText(env, teks));
       if (raw) {
-        const flat = flattenEmbedding(raw);
+        const flat = Array.isArray(raw?.[0]) ? raw[0] : raw;
         const v = validateEmbedding(flat);
         if (v?.length === 512) values = v;
       }
@@ -2462,7 +2445,13 @@ async function visualSearch(env, request) {
   if (!image_base64) return json({ error: "image_base64 diperlukan" }, 400);
 
   try {
-    const queryVec = await clipEmbedImage(env, image_base64);
+    const rawVec = await clipEmbedImage(env, image_base64);
+    const queryVec = (Array.isArray(rawVec[0]) ? rawVec[0] : rawVec)
+      .map(v => { const n = Number(v); return isFinite(n) ? n : 0; });
+
+    if (queryVec.length !== 512) {
+      return json({ error: `Dimensi embedding salah: ${queryVec.length}` }, 500);
+    }
 
     const matches = await env.VECTORIZE.query(queryVec, {
       topK:           50,
