@@ -2213,10 +2213,8 @@ Possible categories: Oli & Filter, Kampas Rem, Ban, Aki, Lampu, Busi, Bearing, R
 
 async function visualStatus(env) {
   try {
-    // describe() kadang tidak akurat — query dummy untuk verifikasi
     const stats = await env.VECTORIZE.describe();
-    // Coba query dengan dummy vector untuk crosscheck
-    const dummy = new Array(768).fill(0.1);
+    const dummy = new Array(512).fill(0.1);
     const test  = await env.VECTORIZE.query(dummy, { topK: 1 });
     return json({
       indexed:       stats.vectorsCount ?? 0,
@@ -2227,80 +2225,45 @@ async function visualStatus(env) {
   }
 }
 
-// Jina CLIP v1 → 768 dim (sesuai Vectorize index)
-const JINA_CLIP_URL = "https://api.jina.ai/v1/embeddings";
+// ── CF Workers AI CLIP (512 dim, gratis, tanpa API key eksternal) ──
 
-// Embed dari base64 atau teks
-async function jinaEmbed(jinaToken, inputObj) {
-  const resp = await fetch(JINA_CLIP_URL, {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${jinaToken}`,
-      "Content-Type":  "application/json",
-      "Accept":        "application/json",
-    },
-    body: JSON.stringify({
-      model:          "jina-clip-v1",
-      normalized:     true,
-      embedding_type: "float",
-      input:          [inputObj],
-    }),
-  });
-  if (!resp.ok) {
-    const err = await resp.text();
-    throw new Error(`Jina error ${resp.status}: ${err.slice(0, 200)}`);
-  }
-  const data = await resp.json();
-  const emb  = data?.data?.[0]?.embedding;
-  if (!Array.isArray(emb)) throw new Error("Format Jina tidak dikenali");
-  return emb;
-}
-
-// Fetch foto dari URL → base64 string (tanpa prefix data:...)
-async function fetchImageBase64(url) {
+// Konversi URL foto → bytes
+async function fetchImageBytes(url) {
   const resp = await fetch(url, {
-    headers: {
-      "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1)",
-      "Referer":    new URL(url).origin,
-    },
+    headers: { "User-Agent": "Mozilla/5.0" },
     cf: { cacheEverything: true, cacheTtl: 86400 },
   });
   if (!resp.ok) throw new Error(`Fetch gagal: ${resp.status}`);
-  const buf  = await resp.arrayBuffer();
-  const bytes = new Uint8Array(buf);
-  let bin = "";
-  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-  return btoa(bin);
+  const buf = await resp.arrayBuffer();
+  return [...new Uint8Array(buf)];
 }
 
-// Embed gambar: coba fetch dulu → base64, fallback ke URL langsung
-async function clipEmbedImage(jinaToken, input) {
-  if (input.startsWith("http")) {
-    // Coba fetch → base64 dulu
-    try {
-      const b64 = await fetchImageBase64(input);
-      return await jinaEmbed(jinaToken, { image: b64 });
-    } catch(e) {
-      // Fallback: kirim URL langsung ke Jina
-      return await jinaEmbed(jinaToken, { image: input });
-    }
-  } else {
-    // base64 dataURL dari browser
-    const b64 = input.includes(",") ? input.split(",")[1] : input;
-    return await jinaEmbed(jinaToken, { image: b64 });
-  }
+// Konversi base64/dataURL → bytes
+function base64ToBytes(input) {
+  const b64 = input.includes(",") ? input.split(",")[1] : input;
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return [...bytes];
 }
 
-// Embed teks produk sebagai fallback jika foto benar-benar tidak bisa
-async function clipEmbedText(jinaToken, text) {
-  return await jinaEmbed(jinaToken, { text });
+// Embed gambar → vektor 512 dim
+async function clipEmbedImage(env, input) {
+  const bytes = input.startsWith("http")
+    ? await fetchImageBytes(input)
+    : base64ToBytes(input);
+  const result = await env.AI.run("@cf/openai/clip-vit-base-patch32", { image: bytes });
+  return result.data[0];
+}
+
+// Embed teks → vektor 512 dim
+async function clipEmbedText(env, text) {
+  const result = await env.AI.run("@cf/openai/clip-vit-base-patch32", { text: [text] });
+  return result.data[0];
 }
 
 // Index semua produk (dipakai cron + manual)
 async function visualIndexAll(env) {
-  const jinaToken = env.JINA_TOKEN;
-  if (!jinaToken) throw new Error("JINA_TOKEN tidak ditemukan");
-
   const { results: products } = await env.BMT_DB.prepare(
     `SELECT id, nama, kategori, merek, alias, foto FROM barang`
   ).all();
@@ -2316,18 +2279,14 @@ async function visualIndexAll(env) {
 
       if (hasFoto) {
         try {
-          embedding = await clipEmbedImage(jinaToken, p.foto);
+          embedding = await clipEmbedImage(env, p.foto);
         } catch(e) {
-          // Foto gagal total → fallback ke teks
-          const teks = [p.nama, p.kategori, p.merek, p.alias]
-            .filter(Boolean).join(" ");
-          embedding = await clipEmbedText(jinaToken, teks);
+          const teks = [p.nama, p.kategori, p.merek, p.alias].filter(Boolean).join(" ");
+          embedding = await clipEmbedText(env, teks);
         }
       } else {
-        // Tidak ada foto → embed teks
-        const teks = [p.nama, p.kategori, p.merek, p.alias]
-          .filter(Boolean).join(" ");
-        embedding = await clipEmbedText(jinaToken, teks);
+        const teks = [p.nama, p.kategori, p.merek, p.alias].filter(Boolean).join(" ");
+        embedding = await clipEmbedText(env, teks);
       }
 
       vectors.push({
@@ -2347,7 +2306,6 @@ async function visualIndexAll(env) {
   }
 
   if (vectors.length > 0) await env.VECTORIZE.upsert(vectors);
-
   return { ok, fail, total: products.length };
 }
 
@@ -2363,9 +2321,6 @@ async function visualIndexManual(env) {
 
 // Index SATU produk — POST /api/visual/index/one { id: "123" }
 async function visualIndexOne(env, request) {
-  const jinaToken = env.JINA_TOKEN;
-  if (!jinaToken) return json({ error: "JINA_TOKEN tidak ditemukan" }, 500);
-
   let body;
   try { body = await request.json(); }
   catch(e) { return json({ error: "Body tidak valid" }, 400); }
@@ -2384,14 +2339,14 @@ async function visualIndexOne(env, request) {
     const hasFoto = p.foto && p.foto !== "" && p.foto !== "null";
     if (hasFoto) {
       try {
-        embedding = await clipEmbedImage(jinaToken, p.foto);
+        embedding = await clipEmbedImage(env, p.foto);
       } catch(e) {
         const teks = [p.nama, p.kategori, p.merek, p.alias].filter(Boolean).join(" ");
-        embedding  = await clipEmbedText(jinaToken, teks);
+        embedding  = await clipEmbedText(env, teks);
       }
     } else {
       const teks = [p.nama, p.kategori, p.merek, p.alias].filter(Boolean).join(" ");
-      embedding  = await clipEmbedText(jinaToken, teks);
+      embedding  = await clipEmbedText(env, teks);
     }
 
     await env.VECTORIZE.upsert([{
@@ -2408,9 +2363,6 @@ async function visualIndexOne(env, request) {
 
 // Search: foto user → CLIP embedding → query Vectorize
 async function visualSearch(env, request) {
-  const jinaToken = env.JINA_TOKEN;
-  if (!jinaToken) return json({ error: "JINA_TOKEN tidak ditemukan" }, 500);
-
   let body;
   try { body = await request.json(); }
   catch(e) { return json({ error: "Body tidak valid" }, 400); }
@@ -2419,7 +2371,7 @@ async function visualSearch(env, request) {
   if (!image_base64) return json({ error: "image_base64 diperlukan" }, 400);
 
   try {
-    const queryVec = await clipEmbedImage(jinaToken, image_base64);
+    const queryVec = await clipEmbedImage(env, image_base64);
 
     const matches = await env.VECTORIZE.query(queryVec, {
       topK:           50,
@@ -2427,13 +2379,12 @@ async function visualSearch(env, request) {
     });
 
     const results = (matches.matches || [])
-      .filter(m => m.score >= 0.60)   // hanya tampil jika benar-benar mirip
+      .filter(m => m.score >= 0.60)
       .map(m => ({
         id:    m.id,
         score: parseFloat(m.score.toFixed(4)),
       }));
 
-    // Kalau tidak ada yang cukup mirip, kembalikan array kosong
     return json({ results });
   } catch(e) {
     return json({ error: String(e) }, 500);
