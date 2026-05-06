@@ -2234,9 +2234,14 @@ const CLIP_URL = "https://wendyrenzya-bigmotor.hf.space/embed";
 
 // Embed gambar → vektor 512 dim
 async function clipEmbedImage(env, input) {
-  const body = input.startsWith("http")
-    ? { image_url: input }
-    : { image_base64: input };
+  let body;
+  if (input.startsWith("http")) {
+    body = { image_url: input };
+  } else {
+    // Hapus prefix "data:image/...;base64," jika ada — HF Space butuh raw base64
+    const base64 = input.includes(",") ? input.split(",")[1] : input;
+    body = { image_base64: base64 };
+  }
 
   const resp = await fetch(CLIP_URL, {
     method: "POST",
@@ -2250,6 +2255,7 @@ async function clipEmbedImage(env, input) {
   }
 
   const data = await resp.json();
+  if (!data.embedding) throw new Error("CLIP tidak mengembalikan embedding");
   return data.embedding;
 }
 
@@ -2293,30 +2299,36 @@ async function visualIndexAll(env) {
 
   for (const p of products) {
     try {
-      let embedding;
+      let values = null;
+      const teks = [p.nama, p.kategori, p.merek, p.alias].filter(Boolean).join(" ");
       const hasFoto = p.foto && p.foto !== "" && p.foto !== "null";
 
+      // Coba image embedding dulu
       if (hasFoto) {
         try {
-          embedding = await clipEmbedImage(env, p.foto);
+          const raw = await clipEmbedImage(env, p.foto);
+          const flat = Array.isArray(raw?.[0]) ? raw[0] : raw;
+          values = validateEmbedding(flat);
+          if (values?.length !== 512) values = null; // dimensi salah → paksa fallback
         } catch(e) {
-          const teks = [p.nama, p.kategori, p.merek, p.alias].filter(Boolean).join(" ");
-          embedding = await clipEmbedText(env, teks);
+          values = null; // error → fallback ke text
         }
-      } else {
-        const teks = [p.nama, p.kategori, p.merek, p.alias].filter(Boolean).join(" ");
-        embedding = await clipEmbedText(env, teks);
       }
 
-      // Pastikan embedding flat array of numbers (bukan nested)
-      const flatEmb = Array.isArray(embedding[0]) ? embedding[0] : embedding;
+      // Fallback ke text jika image gagal atau tidak ada foto
+      if (!values) {
+        try {
+          const raw = await clipEmbedText(env, teks);
+          const flat = Array.isArray(raw?.[0]) ? raw[0] : raw;
+          values = validateEmbedding(flat);
+          if (values?.length !== 512) values = null;
+        } catch(e) {
+          values = null;
+        }
+      }
 
-      // Validasi: tolak jika ada NaN / Infinity / null
-      const values = validateEmbedding(flatEmb);
+      // Kalau keduanya gagal → skip produk ini
       if (!values) { fail++; continue; }
-
-      // Validasi dimensi CLIP harus 512
-      if (values.length !== 512) { fail++; continue; }
 
       vectors.push({
         id:       String(p.id),
@@ -2375,28 +2387,29 @@ async function visualIndexOne(env, request) {
   if (!p) return json({ error: "Produk tidak ditemukan" }, 404);
 
   try {
-    let embedding;
+    let values = null;
+    const teks = [p.nama, p.kategori, p.merek, p.alias].filter(Boolean).join(" ");
     const hasFoto = p.foto && p.foto !== "" && p.foto !== "null";
+
     if (hasFoto) {
       try {
-        embedding = await clipEmbedImage(env, p.foto);
-      } catch(e) {
-        const teks = [p.nama, p.kategori, p.merek, p.alias].filter(Boolean).join(" ");
-        embedding  = await clipEmbedText(env, teks);
-      }
-    } else {
-      const teks = [p.nama, p.kategori, p.merek, p.alias].filter(Boolean).join(" ");
-      embedding  = await clipEmbedText(env, teks);
+        const raw = await clipEmbedImage(env, p.foto);
+        const flat = Array.isArray(raw?.[0]) ? raw[0] : raw;
+        values = validateEmbedding(flat);
+        if (values?.length !== 512) values = null;
+      } catch(e) { values = null; }
     }
 
-    const flatEmb = Array.isArray(embedding[0]) ? embedding[0] : embedding;
+    if (!values) {
+      try {
+        const raw = await clipEmbedText(env, teks);
+        const flat = Array.isArray(raw?.[0]) ? raw[0] : raw;
+        values = validateEmbedding(flat);
+        if (values?.length !== 512) values = null;
+      } catch(e) { values = null; }
+    }
 
-    // Validasi: tolak jika ada NaN / Infinity / null
-    const values = validateEmbedding(flatEmb);
-    if (!values) return json({ ok: false, id: p.id, error: "Embedding tidak valid (NaN/null)" });
-
-    // Validasi dimensi
-    if (values.length !== 512) return json({ ok: false, id: p.id, error: `Dimensi salah: ${values.length} (harus 512)` });
+    if (!values) return json({ ok: false, id: p.id, error: "Embedding tidak valid — image & text gagal" });
 
     await env.VECTORIZE.upsert([{
       id:       String(p.id),
