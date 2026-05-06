@@ -2225,63 +2225,69 @@ async function visualStatus(env) {
   }
 }
 
-// ── Hugging Face CLIP (openai/clip-vit-base-patch32, 512 dim) ──
-// Token disimpan di env.HF_TOKEN (Cloudflare Workers Secret)
+// ── Hugging Face CLIP via sentence-transformers (512 dim) ──
+// Model: sentence-transformers/clip-ViT-B-32
+// Image  → kirim binary bytes via /pipeline/feature-extraction
+// Teks   → kirim JSON { inputs: "teks" } ke endpoint yg sama
+// Token  → env.HF_TOKEN (Cloudflare Workers Secret)
 
-const HF_MODEL = "openai/clip-vit-base-patch32";
+const HF_IMG_URL  = "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/clip-ViT-B-32";
+const HF_TEXT_URL = "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/clip-ViT-B-32";
 
-// Embed gambar dari URL publik → vektor 512 dim
+// Embed gambar → vektor 512 dim
 async function clipEmbedImage(env, input) {
-  let body, headers = {
-    "Authorization": `Bearer ${env.HF_TOKEN}`,
-  };
+  let imgBytes;
 
   if (input.startsWith("http")) {
-    // URL publik → kirim JSON { url }
-    headers["Content-Type"] = "application/json";
-    body = JSON.stringify({ inputs: { image: input } });
+    // Fetch foto dari URL publik (ImgBB, dll)
+    const r = await fetch(input, {
+      headers: { "User-Agent": "Mozilla/5.0" },
+      cf: { cacheEverything: true, cacheTtl: 86400 },
+    });
+    if (!r.ok) throw new Error(`Fetch foto gagal: ${r.status}`);
+    imgBytes = await r.arrayBuffer();
   } else {
-    // base64 dataURL → konversi ke binary blob
-    const b64  = input.includes(",") ? input.split(",")[1] : input;
-    const bin  = atob(b64);
-    const arr  = new Uint8Array(bin.length);
+    // base64 dataURL dari browser
+    const b64 = input.includes(",") ? input.split(",")[1] : input;
+    const bin = atob(b64);
+    const arr = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
-    headers["Content-Type"] = "application/octet-stream";
-    body = arr.buffer;
+    imgBytes = arr.buffer;
   }
 
-  const resp = await fetch(
-    `https://api-inference.huggingface.co/models/${HF_MODEL}`,
-    { method: "POST", headers, body }
-  );
+  const resp = await fetch(HF_IMG_URL, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${env.HF_TOKEN}`,
+      "Content-Type": "application/octet-stream",
+    },
+    body: imgBytes,
+  });
 
   if (!resp.ok) {
     const err = await resp.text();
-    throw new Error(`HF error ${resp.status}: ${err.slice(0, 200)}`);
+    throw new Error(`HF image error ${resp.status}: ${err.slice(0, 200)}`);
   }
 
   const data = await resp.json();
-  // HF feature-extraction mengembalikan array flat atau nested
+  // Response bisa flat array atau nested [[...]]
   return Array.isArray(data[0]) ? data[0] : data;
 }
 
 // Embed teks → vektor 512 dim
 async function clipEmbedText(env, text) {
-  const resp = await fetch(
-    `https://api-inference.huggingface.co/models/${HF_MODEL}`,
-    {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${env.HF_TOKEN}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ inputs: text }),
-    }
-  );
+  const resp = await fetch(HF_TEXT_URL, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${env.HF_TOKEN}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ inputs: text }),
+  });
 
   if (!resp.ok) {
     const err = await resp.text();
-    throw new Error(`HF error ${resp.status}: ${err.slice(0, 200)}`);
+    throw new Error(`HF text error ${resp.status}: ${err.slice(0, 200)}`);
   }
 
   const data = await resp.json();
