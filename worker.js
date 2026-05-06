@@ -2251,7 +2251,7 @@ async function clipEmbedImage(env, input) {
   }
 
   const resp = await fetch(
-    `https://api-inference.huggingface.co/pipeline/feature-extraction/${HF_MODEL}`,
+    `https://api-inference.huggingface.co/models/${HF_MODEL}`,
     { method: "POST", headers, body }
   );
 
@@ -2268,7 +2268,7 @@ async function clipEmbedImage(env, input) {
 // Embed teks → vektor 512 dim
 async function clipEmbedText(env, text) {
   const resp = await fetch(
-    `https://api-inference.huggingface.co/pipeline/feature-extraction/${HF_MODEL}`,
+    `https://api-inference.huggingface.co/models/${HF_MODEL}`,
     {
       method: "POST",
       headers: {
