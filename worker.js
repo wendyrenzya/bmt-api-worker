@@ -2315,10 +2315,17 @@ async function visualIndexAll(env) {
       const values = validateEmbedding(flatEmb);
       if (!values) { fail++; continue; }
 
+      // Validasi dimensi CLIP harus 512
+      if (values.length !== 512) { fail++; continue; }
+
       vectors.push({
         id:       String(p.id),
         values,
-        metadata: { nama: p.nama, foto: p.foto || "" },
+        // Sanitasi metadata — null/undefined TIDAK boleh masuk Vectorize
+        metadata: {
+          nama: String(p.nama ?? ""),
+          foto: String(p.foto ?? ""),
+        },
       });
       ok++;
     } catch(e) {
@@ -2388,10 +2395,16 @@ async function visualIndexOne(env, request) {
     const values = validateEmbedding(flatEmb);
     if (!values) return json({ ok: false, id: p.id, error: "Embedding tidak valid (NaN/null)" });
 
+    // Validasi dimensi
+    if (values.length !== 512) return json({ ok: false, id: p.id, error: `Dimensi salah: ${values.length} (harus 512)` });
+
     await env.VECTORIZE.upsert([{
       id:       String(p.id),
       values,
-      metadata: { nama: p.nama, foto: p.foto || "" },
+      metadata: {
+        nama: String(p.nama ?? ""),
+        foto: String(p.foto ?? ""),
+      },
     }]);
 
     return json({ ok: true, id: p.id, nama: p.nama });
