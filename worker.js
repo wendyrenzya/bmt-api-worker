@@ -1,6 +1,6 @@
 export default {
 async scheduled(event, env, ctx) {
-ctx.waitUntil(visualIndexAll(env));
+  ctx.waitUntil(pingHFSpace());
 },
 async fetch(request, env) {
     const url = new URL(request.url);
@@ -2229,6 +2229,16 @@ async function visualStatus(env) {
 // openai/clip-vit-base-patch32, 512 dim, gratis
 // POST https://wendyrenzya-bigmotor.hf.space/embed
 // Body: { image_url } atau { image_base64 } atau { text }
+
+// ── Ping HF Space agar tidak sleep ──
+async function pingHFSpace() {
+  try {
+    const res = await fetch("https://wendyrenzya-bigmotor.hf.space/");
+    console.log(`[HF-PING] status=${res.status}`);
+  } catch(e) {
+    console.error(`[HF-PING] failed: ${e}`);
+  }
+}
 
 const CLIP_URL = "https://wendyrenzya-bigmotor.hf.space/embed";
 
