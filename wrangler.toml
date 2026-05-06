@@ -2,5 +2,21 @@ name = "bmt-api-worker"
 main = "worker.js"
 compatibility_date = "2024-01-01"
 
+[vars]
+IMG_BB_KEY = "bf028c007711aefd71fdb56a932f7b74"
+
+[[d1_databases]]
+binding = "BMT_DB"
+database_name = "bmt_db"
+database_id = "969fef5e-d7a3-4f58-979b-dbef1f085580"
+
+[ai]
+binding = "AI"
+
+[[vectorize]]
+binding = "VECTORIZE"
+index_name = "produk-index"
+
+# Cron: ping HF Space tiap 12 jam agar tidak sleep
 [triggers]
-crons = ["0 */12 * * *"]  # Ping HF Space tiap 12 jam
+crons = ["0 */12 * * *"]
