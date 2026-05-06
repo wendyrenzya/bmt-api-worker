@@ -2289,6 +2289,13 @@ async function clipEmbedWithRetry(fn, maxRetry = 3, delayMs = 1000) {
   return null;
 }
 
+// ── Flatten embedding: handle [[[ ]]] → [ ] secara rekursif ──
+function flattenEmbedding(raw) {
+  let flat = raw;
+  while (Array.isArray(flat) && Array.isArray(flat[0])) flat = flat[0];
+  return flat;
+}
+
 // ── Validasi embedding: pastikan flat array of finite numbers ──
 function validateEmbedding(emb) {
   if (!Array.isArray(emb) || emb.length === 0) return null;
@@ -2320,7 +2327,7 @@ async function visualIndexAll(env) {
       if (hasFoto) {
         const raw = await clipEmbedWithRetry(() => clipEmbedImage(env, p.foto));
         if (raw) {
-          const flat = Array.isArray(raw?.[0]) ? raw[0] : raw;
+          const flat = flattenEmbedding(raw);
           const v = validateEmbedding(flat);
           if (v?.length === 512) values = v;
         }
@@ -2330,7 +2337,7 @@ async function visualIndexAll(env) {
       if (!values) {
         const raw = await clipEmbedWithRetry(() => clipEmbedText(env, teks));
         if (raw) {
-          const flat = Array.isArray(raw?.[0]) ? raw[0] : raw;
+          const flat = flattenEmbedding(raw);
           const v = validateEmbedding(flat);
           if (v?.length === 512) values = v;
         }
@@ -2403,7 +2410,7 @@ async function visualIndexOne(env, request) {
     if (hasFoto) {
       const raw = await clipEmbedWithRetry(() => clipEmbedImage(env, p.foto));
       if (raw) {
-        const flat = Array.isArray(raw?.[0]) ? raw[0] : raw;
+        const flat = flattenEmbedding(raw);
         const v = validateEmbedding(flat);
         if (v?.length === 512) values = v;
       }
@@ -2412,7 +2419,7 @@ async function visualIndexOne(env, request) {
     if (!values) {
       const raw = await clipEmbedWithRetry(() => clipEmbedText(env, teks));
       if (raw) {
-        const flat = Array.isArray(raw?.[0]) ? raw[0] : raw;
+        const flat = flattenEmbedding(raw);
         const v = validateEmbedding(flat);
         if (v?.length === 512) values = v;
       }
