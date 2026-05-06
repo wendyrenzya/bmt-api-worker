@@ -2273,8 +2273,11 @@ async function clipEmbedText(env, text) {
 // ── Validasi embedding: pastikan flat array of finite numbers ──
 function validateEmbedding(emb) {
   if (!Array.isArray(emb) || emb.length === 0) return null;
-  const values = emb.map(Number);
-  if (values.some(v => !isFinite(v))) return null;
+  // Cek null/undefined SEBELUM konversi — Number(null)=0 tapi harus ditolak
+  if (emb.some(v => v === null || v === undefined)) return null;
+  const values = emb.map(v => typeof v === "number" ? v : Number(v));
+  // Number.isFinite() tidak coerce — null/NaN/Infinity semua false
+  if (!values.every(v => Number.isFinite(v))) return null;
   return values;
 }
 
