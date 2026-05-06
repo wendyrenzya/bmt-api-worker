@@ -2297,9 +2297,12 @@ async function visualIndexAll(env) {
         embedding = await clipEmbedText(env, teks);
       }
 
+      // Pastikan embedding flat array of numbers (bukan nested)
+      const flatEmb = Array.isArray(embedding[0]) ? embedding[0] : embedding;
+
       vectors.push({
         id:       String(p.id),
-        values:   embedding,
+        values:   flatEmb.map(Number),
         metadata: { nama: p.nama, foto: p.foto || "" },
       });
       ok++;
@@ -2357,9 +2360,10 @@ async function visualIndexOne(env, request) {
       embedding  = await clipEmbedText(env, teks);
     }
 
+    const flatEmb = Array.isArray(embedding[0]) ? embedding[0] : embedding;
     await env.VECTORIZE.upsert([{
       id:       String(p.id),
-      values:   embedding,
+      values:   flatEmb.map(Number),
       metadata: { nama: p.nama, foto: p.foto || "" },
     }]);
 
