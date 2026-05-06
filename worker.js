@@ -2238,7 +2238,6 @@ async function clipEmbedImage(env, input) {
   if (input.startsWith("http")) {
     body = { image_url: input };
   } else {
-    // Hapus prefix "data:image/...;base64," jika ada — HF Space butuh raw base64
     const base64 = input.includes(",") ? input.split(",")[1] : input;
     body = { image_base64: base64 };
   }
@@ -2249,13 +2248,13 @@ async function clipEmbedImage(env, input) {
     body: JSON.stringify(body),
   });
 
-  if (!resp.ok) {
-    const err = await resp.text();
-    throw new Error(`CLIP error ${resp.status}: ${err.slice(0, 200)}`);
-  }
+  const raw = await resp.text();
+  console.log(`[CLIP-IMG] status=${resp.status} body=${raw.slice(0, 300)}`);
 
-  const data = await resp.json();
-  if (!data.embedding) throw new Error("CLIP tidak mengembalikan embedding");
+  if (!resp.ok) throw new Error(`CLIP error ${resp.status}: ${raw.slice(0, 200)}`);
+
+  const data = JSON.parse(raw);
+  if (!data.embedding) throw new Error(`CLIP img no embedding. Keys: ${Object.keys(data).join(",")}`);
   return data.embedding;
 }
 
@@ -2267,13 +2266,27 @@ async function clipEmbedText(env, text) {
     body: JSON.stringify({ text }),
   });
 
-  if (!resp.ok) {
-    const err = await resp.text();
-    throw new Error(`CLIP text error ${resp.status}: ${err.slice(0, 200)}`);
-  }
+  const raw = await resp.text();
+  console.log(`[CLIP-TXT] status=${resp.status} body=${raw.slice(0, 300)}`);
 
-  const data = await resp.json();
+  if (!resp.ok) throw new Error(`CLIP text error ${resp.status}: ${raw.slice(0, 200)}`);
+
+  const data = JSON.parse(raw);
+  if (!data.embedding) throw new Error(`CLIP txt no embedding. Keys: ${Object.keys(data).join(",")}`);
   return data.embedding;
+}
+
+// Helper: embed dengan retry (max 3x, delay 1 detik)
+async function clipEmbedWithRetry(fn, maxRetry = 3, delayMs = 1000) {
+  for (let i = 0; i < maxRetry; i++) {
+    try {
+      const result = await fn();
+      if (result) return result;
+    } catch(e) {
+      if (i < maxRetry - 1) await new Promise(r => setTimeout(r, delayMs));
+    }
+  }
+  return null;
 }
 
 // ── Validasi embedding: pastikan flat array of finite numbers ──
@@ -2303,27 +2316,23 @@ async function visualIndexAll(env) {
       const teks = [p.nama, p.kategori, p.merek, p.alias].filter(Boolean).join(" ");
       const hasFoto = p.foto && p.foto !== "" && p.foto !== "null";
 
-      // Coba image embedding dulu
+      // Coba image embedding dulu (dengan retry)
       if (hasFoto) {
-        try {
-          const raw = await clipEmbedImage(env, p.foto);
+        const raw = await clipEmbedWithRetry(() => clipEmbedImage(env, p.foto));
+        if (raw) {
           const flat = Array.isArray(raw?.[0]) ? raw[0] : raw;
-          values = validateEmbedding(flat);
-          if (values?.length !== 512) values = null; // dimensi salah → paksa fallback
-        } catch(e) {
-          values = null; // error → fallback ke text
+          const v = validateEmbedding(flat);
+          if (v?.length === 512) values = v;
         }
       }
 
-      // Fallback ke text jika image gagal atau tidak ada foto
+      // Fallback ke text jika image gagal atau tidak ada foto (dengan retry)
       if (!values) {
-        try {
-          const raw = await clipEmbedText(env, teks);
+        const raw = await clipEmbedWithRetry(() => clipEmbedText(env, teks));
+        if (raw) {
           const flat = Array.isArray(raw?.[0]) ? raw[0] : raw;
-          values = validateEmbedding(flat);
-          if (values?.length !== 512) values = null;
-        } catch(e) {
-          values = null;
+          const v = validateEmbedding(flat);
+          if (v?.length === 512) values = v;
         }
       }
 
@@ -2392,21 +2401,21 @@ async function visualIndexOne(env, request) {
     const hasFoto = p.foto && p.foto !== "" && p.foto !== "null";
 
     if (hasFoto) {
-      try {
-        const raw = await clipEmbedImage(env, p.foto);
+      const raw = await clipEmbedWithRetry(() => clipEmbedImage(env, p.foto));
+      if (raw) {
         const flat = Array.isArray(raw?.[0]) ? raw[0] : raw;
-        values = validateEmbedding(flat);
-        if (values?.length !== 512) values = null;
-      } catch(e) { values = null; }
+        const v = validateEmbedding(flat);
+        if (v?.length === 512) values = v;
+      }
     }
 
     if (!values) {
-      try {
-        const raw = await clipEmbedText(env, teks);
+      const raw = await clipEmbedWithRetry(() => clipEmbedText(env, teks));
+      if (raw) {
         const flat = Array.isArray(raw?.[0]) ? raw[0] : raw;
-        values = validateEmbedding(flat);
-        if (values?.length !== 512) values = null;
-      } catch(e) { values = null; }
+        const v = validateEmbedding(flat);
+        if (v?.length === 512) values = v;
+      }
     }
 
     if (!values) return json({ ok: false, id: p.id, error: "Embedding tidak valid — image & text gagal" });
