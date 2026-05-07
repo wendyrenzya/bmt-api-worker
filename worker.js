@@ -599,26 +599,28 @@ async function addBarang(env, req) {
   const now = nowISO();
   const r = await env.BMT_DB
     .prepare(`
-    INSERT INTO barang (
-  kode_barang, nama, merek, kategori, harga, komisi, stock, foto, deskripsi, created_at
-) VALUES (?,?,?,?,?,?,?,?,?,?)
-  `)
+      INSERT INTO barang (
+        kode_barang, nama, pnp, spek, kategori, harga, komisi, stock, foto, deskripsi, created_at
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+    `)
     .bind(
-  b.kode_barang || "KB" + Date.now().toString().slice(-6),
-  b.nama,
-  b.merek || "",
-  b.kategori || "",
-  Number(b.harga || 0),
-  Number(b.komisi || 0),
-  Number(b.stock || 0),
-  b.foto || "",
-  b.deskripsi || "",
-  now
-)
+      b.kode_barang || "KB" + Date.now().toString().slice(-6),
+      b.nama,
+      b.pnp      || "",
+      b.spek     || "",
+      b.kategori || "",
+      Number(b.harga  || 0),
+      Number(b.komisi || 0),
+      Number(b.stock  || 0),
+      b.foto      || "",
+      b.deskripsi || "",
+      now
+    )
     .run();
 
   return json({ ok: true, id: r.lastRowId || null });
 }
+
 ///////////////////////////////////////////////////////////////
 // 🔧 UPDATE BARANG — PUT / PATCH
 // Catatan Penting:
@@ -640,21 +642,22 @@ async function updateBarang(env, req) {
 
   ///////////////////////////////////////////////////////////////
   // Daftar field yang boleh di-update
-  // PERHATIKAN: "stock" sengaja TIDAK ADA karena tidak boleh edit manual
+  // merek dihapus → diganti pnp & spek
   ///////////////////////////////////////////////////////////////
   const allowed = [
-  "nama",
-  "merek",
-  "alias",
-  "kategori",
-  "harga",
-  "komisi",
-  "foto",
-  "lokasi",
-  "deskripsi",
-  "stock",
-  "kode_barang"
-];
+    "nama",
+    "pnp",
+    "spek",
+    "alias",
+    "kategori",
+    "harga",
+    "komisi",
+    "foto",
+    "lokasi",
+    "deskripsi",
+    "stock",
+    "kode_barang"
+  ];
 
   ///////////////////////////////////////////////////////////////
   // Build SET SQL dinamis
@@ -2096,11 +2099,6 @@ async function laporanHarianRange(env, url){
 // Sisipkan di worker.js — handler GET /api/stok_keluar
 // ============================================================
 
-// Di bagian routing utama (fetch handler), tambahkan:
-//   if (path === "/api/stok_keluar" && method === "GET") return handleGetStokKeluar(request, env);
-
-// ============================================================
-
 async function handleGetStokKeluar(request, env) {
   try {
     const url   = new URL(request.url);
@@ -2303,7 +2301,7 @@ function validateEmbedding(emb) {
 // Index semua produk (dipakai cron + manual)
 async function visualIndexAll(env) {
   const { results: products } = await env.BMT_DB.prepare(
-    `SELECT id, nama, kategori, merek, alias, foto FROM barang`
+    `SELECT id, nama, kategori, pnp, spek, alias, foto FROM barang`
   ).all();
 
   if (!products?.length) return { ok: 0, fail: 0, total: 0 };
@@ -2313,7 +2311,7 @@ async function visualIndexAll(env) {
   for (const p of products) {
     try {
       let values = null;
-      const teks = [p.nama, p.kategori, p.merek, p.alias].filter(Boolean).join(" ");
+      const teks = [p.nama, p.kategori, p.pnp, p.spek, p.alias].filter(Boolean).join(" ");
       const hasFoto = p.foto && p.foto !== "" && p.foto !== "null";
 
       // Coba image embedding dulu (dengan retry)
@@ -2390,14 +2388,14 @@ async function visualIndexOne(env, request) {
   if (!id) return json({ error: "id diperlukan" }, 400);
 
   const p = await env.BMT_DB.prepare(
-    `SELECT id, nama, kategori, merek, alias, foto FROM barang WHERE id = ?`
+    `SELECT id, nama, kategori, pnp, spek, alias, foto FROM barang WHERE id = ?`
   ).bind(id).first();
 
   if (!p) return json({ error: "Produk tidak ditemukan" }, 404);
 
   try {
     let values = null;
-    const teks = [p.nama, p.kategori, p.merek, p.alias].filter(Boolean).join(" ");
+    const teks = [p.nama, p.kategori, p.pnp, p.spek, p.alias].filter(Boolean).join(" ");
     const hasFoto = p.foto && p.foto !== "" && p.foto !== "null";
 
     if (hasFoto) {
@@ -2470,11 +2468,12 @@ async function visualSearch(env, request) {
     return json({ error: String(e) }, 500);
   }
 }
+
 async function visualUnindexed(env) {
   try {
     // 1. Ambil semua produk dari DB
     const { results: products } = await env.BMT_DB.prepare(
-      `SELECT id, nama, kategori, merek, foto FROM barang ORDER BY nama ASC`
+      `SELECT id, nama, kategori, pnp, spek, foto FROM barang ORDER BY nama ASC`
     ).all();
 
     if (!products?.length) {
@@ -2506,7 +2505,7 @@ async function visualUnindexed(env) {
       total_products:  products.length,
       total_indexed:   indexedIds.size,
       total_unindexed: unindexed.length,
-      unindexed,          // array produk {id, nama, kategori, merek, foto}
+      unindexed,          // array produk {id, nama, kategori, pnp, spek, foto}
     });
   } catch (e) {
     return json({ error: String(e) }, 500);
