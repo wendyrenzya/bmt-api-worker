@@ -12,6 +12,8 @@ async fetch(request, env) {
 
     try {
     
+        
+        if (url.pathname === "/api/imgproxy") return handleImgProxy(request);
     // ==========================
     // ABSENSI
     // ==========================
@@ -2511,6 +2513,61 @@ async function visualUnindexed(env) {
     return json({ error: String(e) }, 500);
   }
 }
+
+// ============================================================
+// Tambahkan handler ini di worker.js Anda
+// Route: GET /api/imgproxy?url=<encoded_url>
+// ============================================================
+
+async function handleImgProxy(request) {
+  const { searchParams } = new URL(request.url);
+  const target = searchParams.get("url");
+
+  if (!target) {
+    return new Response("Missing url param", { status: 400 });
+  }
+
+  // Hanya izinkan URL http/https
+  if (!/^https?:\/\//i.test(target)) {
+    return new Response("Invalid url", { status: 400 });
+  }
+
+  try {
+    const upstream = await fetch(target, {
+      headers: { "User-Agent": "Mozilla/5.0" },
+    });
+
+    if (!upstream.ok) {
+      return new Response("Upstream error: " + upstream.status, { status: 502 });
+    }
+
+    const contentType = upstream.headers.get("content-type") || "image/jpeg";
+    const body = await upstream.arrayBuffer();
+
+    return new Response(body, {
+      status: 200,
+      headers: {
+        "Content-Type": contentType,
+        "Access-Control-Allow-Origin": "*",        // izinkan browser baca response
+        "Access-Control-Allow-Methods": "GET",
+        "Cache-Control": "public, max-age=86400",  // cache 1 hari di edge
+      },
+    });
+  } catch (err) {
+    return new Response("Proxy fetch failed: " + err.message, { status: 502 });
+  }
+}
+
+// ── Contoh integrasi di router utama worker Anda ──────────────
+//
+// Jika pakai if/else:
+//   if (url.pathname === "/api/imgproxy") return handleImgProxy(request);
+//
+// Jika pakai router (itty-router / hono):
+//   router.get("/api/imgproxy", handleImgProxy);
+//
+// ─────────────────────────────────────────────────────────────
+
 //////////////////////////////
 // END OF FILE
 //////////////////////////////
