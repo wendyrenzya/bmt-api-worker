@@ -23,4 +23,4 @@ crons = ["0 */12 * * *"]
 
 [[kv_namespaces]]
 binding = "KV"
-id      = "paste-id-disini"
+id      = "47b50b1701714c33bb5352f39faa0e46"
