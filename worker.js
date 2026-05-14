@@ -16,7 +16,7 @@ export default {
       if (url.pathname === "/api/imgproxy") return handleImgProxy(request);
 
       // ==========================
-      // ABSENSI
+      // ABSENSI 
       // ==========================
       if (path === "/api/absensi" && method === "POST")  return absensiAdd(env, request);
       if (path === "/api/absensi" && method === "GET")   return absensiList(env);
