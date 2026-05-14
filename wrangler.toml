@@ -15,8 +15,12 @@ binding = "AI"
 
 [[vectorize]]
 binding = "VECTORIZE"
-index_name = "produk-index"
+index_name = "47b50b1701714c33bb5352f39faa0e46"
 
 # Cron: ping HF Space tiap 12 jam agar tidak sleep
 [triggers]
 crons = ["0 */12 * * *"]
+
+[[kv_namespaces]]
+binding = "KV"
+id      = "paste-id-disini"
