@@ -330,14 +330,14 @@ async function badgesGet(env, url) {
       `SELECT COUNT(DISTINCT transaksi_id) AS cnt FROM riwayat WHERE created_at > ?`
     ).bind(lsR || now).first(),
 
-    // Ongoing: real-time, tidak pakai last_seen
+    // Ongoing: real-time, tidak pakai last_seen, exclude charge
     env.BMT_DB.prepare(
-      `SELECT COUNT(*) AS cnt FROM servis WHERE status = 'ongoing'`
+      `SELECT COUNT(*) AS cnt FROM servis WHERE status = 'ongoing' AND transaksi_id NOT LIKE 'CHG-%'`
     ).first(),
 
-    // Selesai: baru sejak last_seen
+    // Selesai: baru sejak last_seen, exclude charge
     env.BMT_DB.prepare(
-      `SELECT COUNT(*) AS cnt FROM servis WHERE status = 'selesai' AND selesai_at > ?`
+      `SELECT COUNT(*) AS cnt FROM servis WHERE status = 'selesai' AND selesai_at > ? AND transaksi_id NOT LIKE 'CHG-%'`
     ).bind(lsS || now).first()
   ]);
 
