@@ -274,12 +274,10 @@ async function kvDel(env, ...keys) {
 }
 
 // ══════════════════════════════════════════════════════════════════
-// BADGES  (BARU)
+// BADGES
 // ══════════════════════════════════════════════════════════════════
 
 // GET /api/badges?user=:username
-// Menggantikan 3 fetch terpisah di home.html
-// Menggunakan KV last_seen per user per modul (cross-device)
 async function badgesGet(env, url) {
   const user = url.searchParams.get("user");
   if (!user) return json({ error: "user required" }, 400);
@@ -287,61 +285,80 @@ async function badgesGet(env, url) {
   const K = {
     transaksi:   `last_seen:transaksi:${user}`,
     pengeluaran: `last_seen:pengeluaran:${user}`,
-    harga:       `last_seen:harga:${user}`
+    harga:       `last_seen:harga:${user}`,
+    riwayat:     `last_seen:riwayat:${user}`,
+    servis:      `last_seen:servis:${user}`
   };
-
-  // Ambil semua last_seen paralel
-  const [lsT, lsP, lsH] = await Promise.all([
-    env.KV.get(K.transaksi).catch(() => null),
-    env.KV.get(K.pengeluaran).catch(() => null),
-    env.KV.get(K.harga).catch(() => null)
-  ]);
 
   const now = nowISO();
 
-  // First visit: init semua key yang null, return 0 (tidak ada badge dulu)
+  const [lsT, lsP, lsH, lsR, lsS] = await Promise.all([
+    env.KV.get(K.transaksi).catch(() => null),
+    env.KV.get(K.pengeluaran).catch(() => null),
+    env.KV.get(K.harga).catch(() => null),
+    env.KV.get(K.riwayat).catch(() => null),
+    env.KV.get(K.servis).catch(() => null)
+  ]);
+
+  // Init per-modul — tidak early return semua kalau hanya 1 yang null
   const toInit = [];
   if (!lsT) toInit.push(env.KV.put(K.transaksi,   now));
   if (!lsP) toInit.push(env.KV.put(K.pengeluaran, now));
   if (!lsH) toInit.push(env.KV.put(K.harga,       now));
+  if (!lsR) toInit.push(env.KV.put(K.riwayat,     now));
+  if (!lsS) toInit.push(env.KV.put(K.servis,      now));
+  if (toInit.length) await Promise.all(toInit).catch(() => {});
 
-  if (toInit.length) {
-    await Promise.all(toInit).catch(() => {});
-    return json({ transaksi: 0, pengeluaran: 0, harga: 0 });
-  }
+  // First visit benar-benar baru — semua null
+  if (!lsT && !lsP && !lsH && !lsR && !lsS)
+    return json({ transaksi: 0, pengeluaran: 0, harga: 0, riwayat: 0, servis_ongoing: 0, servis_selesai: 0 });
 
-  // Hitung new entries sejak last_seen — 3 query D1 paralel
-  const [cntT, cntP, cntH] = await Promise.all([
-    env.BMT_DB.prepare(`
-      SELECT COUNT(DISTINCT transaksi_id) AS cnt
-      FROM stock_track WHERE created_at > ?
-    `).bind(lsT).first(),
+  const [cntT, cntP, cntH, cntR, cntOngoing, cntSelesai] = await Promise.all([
+    env.BMT_DB.prepare(
+      `SELECT COUNT(*) AS cnt FROM stock_track WHERE created_at > ?`
+    ).bind(lsT || now).first(),
 
-    env.BMT_DB.prepare(`
-      SELECT COUNT(*) AS cnt FROM pengeluaran WHERE created_at > ?
-    `).bind(lsP).first(),
+    env.BMT_DB.prepare(
+      `SELECT COUNT(*) AS cnt FROM pengeluaran WHERE created_at > ?`
+    ).bind(lsP || now).first(),
 
-    env.BMT_DB.prepare(`
-      SELECT COUNT(*) AS cnt FROM messages WHERE created_at > ?
-    `).bind(lsH).first()
+    env.BMT_DB.prepare(
+      `SELECT COUNT(*) AS cnt FROM messages WHERE created_at > ?`
+    ).bind(lsH || now).first(),
+
+    env.BMT_DB.prepare(
+      `SELECT COUNT(DISTINCT transaksi_id) AS cnt FROM riwayat WHERE created_at > ?`
+    ).bind(lsR || now).first(),
+
+    // Ongoing: real-time, tidak pakai last_seen
+    env.BMT_DB.prepare(
+      `SELECT COUNT(*) AS cnt FROM servis WHERE status = 'ongoing'`
+    ).first(),
+
+    // Selesai: baru sejak last_seen
+    env.BMT_DB.prepare(
+      `SELECT COUNT(*) AS cnt FROM servis WHERE status = 'selesai' AND selesai_at > ?`
+    ).bind(lsS || now).first()
   ]);
 
   return json({
-    transaksi:   Number(cntT?.cnt || 0),
-    pengeluaran: Number(cntP?.cnt || 0),
-    harga:       Number(cntH?.cnt || 0)
+    transaksi:      Number(cntT?.cnt       || 0),
+    pengeluaran:    Number(cntP?.cnt       || 0),
+    harga:          Number(cntH?.cnt       || 0),
+    riwayat:        Number(cntR?.cnt       || 0),
+    servis_ongoing: Number(cntOngoing?.cnt || 0),  // biru
+    servis_selesai: Number(cntSelesai?.cnt || 0)   // merah
   });
 }
 
 // POST /api/badges/seen
 // Body: { user: "wendy", modul: "transaksi" }
-// Dipanggil saat user membuka halaman modul
 async function badgesSeen(env, req) {
   const b = await bodyJSON(req);
   if (!b?.user || !b?.modul)
     return json({ error: "user & modul required" }, 400);
 
-  const valid = ["transaksi", "pengeluaran", "harga"];
+  const valid = ["transaksi", "pengeluaran", "harga", "riwayat", "servis"];
   if (!valid.includes(b.modul))
     return json({ error: "modul tidak valid" }, 400);
 
