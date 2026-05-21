@@ -13,17 +13,20 @@ export default {
 
     try {
 
+      // ══════════════════════════════════════════
+      // IMG PROXY
+      // ══════════════════════════════════════════
       if (url.pathname === "/api/imgproxy") return handleImgProxy(request);
 
-      // ==========================
-      // ABSENSI 
-      // ==========================
+      // ══════════════════════════════════════════
+      // ABSENSI (absen.html)
+      // ══════════════════════════════════════════
       if (path === "/api/absensi" && method === "POST")  return absensiAdd(env, request);
       if (path === "/api/absensi" && method === "GET")   return absensiList(env);
 
-      // ==========================
-      // BARANG
-      // ==========================
+      // ══════════════════════════════════════════
+      // BARANG CRUD (barang.html, barang_detail.html, barang_edit.html, add_item.html)
+      // ══════════════════════════════════════════
       if (path === "/api/barang" && method === "GET")    return listBarang(env);
       if (path === "/api/barang" && method === "POST")   return addBarang(env, request);
 
@@ -34,29 +37,38 @@ export default {
       if (path.startsWith("/api/barang/") && method === "DELETE")
         return deleteBarang(env, request);
 
-      // ==========================
-      // STOK MASUK / KELUAR / AUDIT
-      // ==========================
+      // ══════════════════════════════════════════
+      // STOK (add_item.html, stok pages)
+      // ══════════════════════════════════════════
       if (path === "/api/stok_masuk"  && method === "POST") return stokMasuk(env, request);
       if (path === "/api/stok_keluar" && method === "POST") return stokKeluar(env, request);
       if (path === "/api/stok_keluar" && method === "GET")  return handleGetStokKeluar(request, env);
       if (path === "/api/stok_audit"  && method === "POST") return stokAudit(env, request);
       if (path === "/api/stock_track")                      return stockTrack(env);
 
-      // ==========================
-      // SEARCH / KATEGORI
-      // ==========================
+      // ══════════════════════════════════════════
+      // VARIASI BARANG
+      // ══════════════════════════════════════════
+      if (path === "/api/variasi"          && method === "GET")    return variasiList(env, url);
+      if (path === "/api/variasi"          && method === "POST")   return variasiAdd(env, request);
+      if (path.startsWith("/api/variasi/") && method === "PUT")    return variasiUpdate(env, request);
+      if (path.startsWith("/api/variasi/") && method === "DELETE") return variasiDelete(env, request);
+
+      // ══════════════════════════════════════════
+      // SEARCH / KATEGORI (barang.html, add_item.html)
+      // ══════════════════════════════════════════
       if (path === "/api/barang_search" && method === "GET") return searchBarang(env, url);
       if (path === "/api/kategori"      && method === "GET") return listKategori(env);
 
-      // ==========================
-      // IMAGE SEARCH (AI VISUAL)
-      // ==========================
+      // ══════════════════════════════════════════
+      // IMAGE SEARCH AI (barang.html)
+      // ══════════════════════════════════════════
       if (path === "/api/image-search" && method === "POST") return handleImageSearch(request, env);
 
-      // ==========================
-      // SERVIS — urutan PENTING, specific dulu baru generic
-      // ==========================
+      // ══════════════════════════════════════════
+      // SERVIS (barang_detail.html, servis pages)
+      // Urutan penting: specific dulu, generic terakhir
+      // ══════════════════════════════════════════
       if (path.startsWith("/api/servis/alasan/")      && method === "PUT")
         return servisUpdateAlasan(env, request);
       if (path.startsWith("/api/servis/update_cost/") && method === "PUT")
@@ -78,113 +90,97 @@ export default {
 
       if (path === "/api/servis"       && method === "GET")  return servisList(env);
       if (path === "/api/servis"       && method === "POST") return servisAdd(env, request);
-
-      // BARU: endpoint servis hari ini — harus SEBELUM /api/servis/:id GET
       if (path === "/api/servis/today" && method === "GET")  return servisToday(env);
-
-      // Detail servis (paling bawah — catch-all GET /api/servis/:id)
       if (path.startsWith("/api/servis/") && method === "GET")
         return servisDetail(env, request);
 
-      // ==========================
+      // ══════════════════════════════════════════
       // RIWAYAT SERVIS
-      // ==========================
+      // ══════════════════════════════════════════
       if (path === "/api/riwayat_servis"          && method === "POST") return riwayatServisAdd(env, request);
       if (path.startsWith("/api/riwayat_servis/") && method === "GET")  return riwayatServisGet(env, request);
 
-      // ==========================
-      // RIWAYAT
-      // ==========================
+      // ══════════════════════════════════════════
+      // RIWAYAT TRANSAKSI
+      // ══════════════════════════════════════════
       if (path === "/api/riwayat"          && method === "GET") return riwayatAll(env, url);
       if (path.startsWith("/api/riwayat/") && method === "GET") return riwayatDetail(env, request);
-
-      // ==========================
-      // PER-BARANG HISTORY
-      // ==========================
       if (path.startsWith("/api/barang_history/") && method === "GET")
         return riwayatBarang(env, request);
 
-      // ==========================
-      // MESSAGE
-      // ==========================
+      // ══════════════════════════════════════════
+      // MESSAGE / SETTINGS (pengaturan.html)
+      // ══════════════════════════════════════════
       if (path === "/api/message"          && method === "GET")    return messageGet(env);
       if (path === "/api/message"          && method === "POST")   return messageAdd(env, request);
       if (path.startsWith("/api/message/") && method === "DELETE") return messageDelete(env, request);
 
-      // ==========================
-      // SETTINGS
-      // ==========================
-      if (path === "/api/settings/custom_message" && method === "GET")
-        return settingsGetCustomMessage(env);
-      if (path === "/api/settings/custom_message" && method === "POST")
-        return settingsSetCustomMessage(env, request);
+      if (path === "/api/settings/custom_message" && method === "GET")  return settingsGetCustomMessage(env);
+      if (path === "/api/settings/custom_message" && method === "POST") return settingsSetCustomMessage(env, request);
       if (path === "/api/settings"          && method === "GET")    return settingsList(env);
       if (path === "/api/settings"          && method === "POST")   return settingsSet(env, request);
       if (path.startsWith("/api/settings/") && method === "DELETE") return settingsDelete(env, request);
 
-      // ==========================
-      // LOGIN
-      // ==========================
+      // ══════════════════════════════════════════
+      // AUTH / LOGIN (login.html)
+      // ══════════════════════════════════════════
       if (path === "/api/login" && method === "POST") return loginUser(env, request);
 
-      // ==========================
-      // BADGES (BARU)
-      // ==========================
+      // ══════════════════════════════════════════
+      // BADGES (home.html, pengeluaran.html)
+      // ══════════════════════════════════════════
       if (path === "/api/badges"      && method === "GET")  return badgesGet(env, url);
       if (path === "/api/badges/seen" && method === "POST") return badgesSeen(env, request);
 
-      // ==========================
-      // USERS
-      // ==========================
+      // ══════════════════════════════════════════
+      // USERS (pengaturan.html, bonus.html, home.html)
+      // ══════════════════════════════════════════
       if (path === "/api/users"                && method === "GET")    return usersList(env);
       if (path === "/api/users"                && method === "POST")   return usersAdd(env, request);
       if (path.startsWith("/api/users/")       && method === "DELETE") return usersDelete(env, request);
-
-      // BARU: by_username — harus SEBELUM /api/user/:id GET
       if (path === "/api/user/by_username"     && method === "GET")    return userByUsername(env, url);
+      if (path.startsWith("/api/user/name/")     && method === "PUT")  return userUpdateNama(env, request);
+      if (path.startsWith("/api/user/password/") && method === "PUT")  return userUpdatePassword(env, request);
+      if (path.startsWith("/api/user/foto/")     && method === "PUT")  return userUpdateFoto(env, request);
+      if (path.startsWith("/api/user/")          && method === "GET")  return userDetail(env, request);
 
-      if (path.startsWith("/api/user/name/")     && method === "PUT") return userUpdateNama(env, request);
-      if (path.startsWith("/api/user/password/") && method === "PUT") return userUpdatePassword(env, request);
-      if (path.startsWith("/api/user/foto/")     && method === "PUT") return userUpdateFoto(env, request);
-      if (path.startsWith("/api/user/")          && method === "GET") return userDetail(env, request);
-
-      // ==========================
-      // PENGELUARAN
-      // ==========================
+      // ══════════════════════════════════════════
+      // PENGELUARAN (pengeluaran.html)
+      // ══════════════════════════════════════════
       if (path === "/api/pengeluaran"          && method === "POST")   return pengeluaranAdd(env, request);
       if (path === "/api/pengeluaran"          && method === "GET")    return pengeluaranList(env);
       if (path.startsWith("/api/pengeluaran/") && method === "DELETE") return pengeluaranDelete(env, request);
 
-      // ==========================
-      // LAPORAN
-      // ==========================
+      // ══════════════════════════════════════════
+      // LAPORAN (laporan pages)
+      // ══════════════════════════════════════════
       if (path === "/api/laporan/bulanan"         && method === "GET")  return laporanBulanan(env, url);
       if (path === "/api/laporan/harian/summary"  && method === "GET")  return laporanHarianSummary(env);
       if (path === "/api/laporan/harian/list"     && method === "GET")  return laporanHarianList(env);
+      // [REMOVED] POST /api/laporan/harian → duplikat, versi lengkap (keuangan+bonus) ada di MSG_HOST
       if (path === "/api/laporan/harian"          && method === "GET")  return laporanHarianRange(env, url);
-      if (path === "/api/laporan/harian"          && method === "POST") return laporanHarianSave(env, request);
       if (path === "/api/laporan/detail"          && method === "GET")  return laporanDetail(env, url);
 
-      // ==========================
-      // BONUS
-      // ==========================
+      // ══════════════════════════════════════════
+      // BONUS (bonus.html)
+      // ══════════════════════════════════════════
       if (path === "/api/bonus/riwayat"  && method === "GET")  return bonusRiwayat(env, url);
       if (path === "/api/bonus/achieved" && method === "POST") return bonusAchieved(env, request);
       if (path === "/api/bonus/status"   && method === "POST") return bonusUpdateStatus(env, request);
       if (path === "/api/bonus/progress" && method === "GET")  return bonusProgress(env, url);
 
-      // ==========================
-      // VISUAL SEARCH
-      // ==========================
+      // ══════════════════════════════════════════
+      // VISUAL SEARCH (barang.html)
+      // ══════════════════════════════════════════
       if (path === "/api/visual/status"      && method === "GET")  return visualStatus(env);
       if (path === "/api/visual/index"       && method === "POST") return visualIndexManual(env);
       if (path === "/api/visual/index/one"   && method === "POST") return visualIndexOne(env, request);
       if (path === "/api/visual/search"      && method === "POST") return visualSearch(env, request);
       if (path === "/api/visual/unindexed"   && method === "GET")  return visualUnindexed(env);
 
-      // ==========================
-      // HEALTH
-      // ==========================
+      // ══════════════════════════════════════════
+      // HEALTH CHECK
+      // ══════════════════════════════════════════
       if (path === "/api/health" || path === "/health")
         return json({ ok: true, now: new Date().toISOString() });
 
@@ -234,20 +230,25 @@ function makeTID() {
 function mergeItems(items) {
   const map = new Map();
   for (const it of items) {
-    const key = Number(it.id || it.barang_id);
-    if (!key) continue;
-    const qty = Number(it.jumlah || it.qty || 0);
+    const id    = Number(it.id || it.barang_id);
+    if (!id) continue;
+    const qty   = Number(it.jumlah || it.qty || 0);
+    const harga = Number(it.harga  || 0);
+    const vid   = it.variasi_id ? String(it.variasi_id) : "";
+    const key   = `${id}_${harga}_${vid}`;
     if (map.has(key)) {
       map.get(key).jumlah += qty;
       map.get(key).qty     = map.get(key).jumlah;
     } else {
       map.set(key, {
-        id:         key,
+        id,
         qty,
-        jumlah:     qty,
-        harga:      Number(it.harga  || 0),
-        komisi:     Number(it.komisi || 0),
-        keterangan: it.keterangan || ""
+        jumlah:       qty,
+        harga,
+        komisi:       Number(it.komisi || 0),
+        keterangan:   it.keterangan   || "",
+        variasi_id:   it.variasi_id   || null,
+        variasi_nama: it.variasi_nama || null
       });
     }
   }
@@ -598,17 +599,18 @@ async function stokKeluar(env, req) {
     }
 
     await env.BMT_DB.prepare(`
-      INSERT INTO stok_keluar(barang_id,jumlah,harga,dibuat_oleh,keterangan,created_at,transaksi_id)
-      VALUES (?,?,?,?,?,?,?)
-    `).bind(it.id, it.jumlah||it.qty||0, it.harga||0, operator, it.keterangan||"", now, tid).run();
+      INSERT INTO stok_keluar(barang_id,jumlah,harga,dibuat_oleh,keterangan,created_at,transaksi_id,variasi_id,variasi_nama)
+      VALUES (?,?,?,?,?,?,?,?,?)
+    `).bind(it.id, it.jumlah||it.qty||0, it.harga||0, operator, it.keterangan||"", now, tid, it.variasi_id||null, it.variasi_nama||null).run();
 
     const rowBarang  = await env.BMT_DB.prepare(`SELECT nama FROM barang WHERE id=?`).bind(it.id).first();
     const namaBarang = rowBarang?.nama || "";
+    const displayNama = it.variasi_nama || namaBarang;
 
     await env.BMT_DB.prepare(`
-      INSERT INTO riwayat(tipe,barang_id,barang_nama,jumlah,harga,komisi,catatan,dibuat_oleh,created_at,transaksi_id)
-      VALUES (?,?,?,?,?,?,?,?,?,?)
-    `).bind("keluar", it.id, namaBarang, it.jumlah||it.qty||0, it.harga||0, 0, it.keterangan||"", operator, now, tid).run();
+      INSERT INTO riwayat(tipe,barang_id,barang_nama,jumlah,harga,komisi,catatan,dibuat_oleh,created_at,transaksi_id,variasi_nama)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?)
+    `).bind("keluar", it.id, displayNama, it.jumlah||it.qty||0, it.harga||0, 0, it.keterangan||"", operator, now, tid, it.variasi_nama||null).run();
   }
 
   return json({ ok: true, transaksi_id: tid });
@@ -1571,6 +1573,56 @@ async function visualUnindexed(env) {
     const unindexed = products.filter(p => !indexedIds.has(String(p.id)));
     return json({ total_products: products.length, total_indexed: indexedIds.size, total_unindexed: unindexed.length, unindexed });
   } catch(e) { return json({ error: String(e) }, 500); }
+}
+
+// ══════════════════════════════════════════════════════════════════
+// VARIASI BARANG
+// ══════════════════════════════════════════════════════════════════
+
+// GET /api/variasi?barang_id=X
+async function variasiList(env, url) {
+  const barang_id = url.searchParams.get("barang_id");
+  if (!barang_id) return json({ error: "barang_id required" }, 400);
+  const rows = await env.BMT_DB
+    .prepare(`SELECT * FROM variasi WHERE barang_id=? ORDER BY id ASC`)
+    .bind(Number(barang_id)).all();
+  return json({ items: rows.results || [] });
+}
+
+// POST /api/variasi
+// Body: { barang_id, nama, harga }
+async function variasiAdd(env, req) {
+  const b = await bodyJSON(req);
+  if (!b || !b.barang_id || !b.nama || b.harga === undefined)
+    return json({ error: "barang_id, nama & harga required" }, 400);
+  const r = await env.BMT_DB
+    .prepare(`INSERT INTO variasi(barang_id,nama,harga,created_at) VALUES(?,?,?,?)`)
+    .bind(Number(b.barang_id), b.nama, Number(b.harga || 0), nowISO()).run();
+  return json({ ok: true, id: r.lastInsertRowId });
+}
+
+// PUT /api/variasi/:id
+// Body: { nama?, harga? }
+async function variasiUpdate(env, req) {
+  const id   = Number(req.url.split("/").pop());
+  const b    = await bodyJSON(req);
+  if (!b) return json({ error: "body required" }, 400);
+  const sets = [], vals = [];
+  if (b.nama  !== undefined) { sets.push("nama=?");  vals.push(b.nama); }
+  if (b.harga !== undefined) { sets.push("harga=?"); vals.push(Number(b.harga)); }
+  if (!sets.length) return json({ error: "no fields to update" }, 400);
+  vals.push(id);
+  await env.BMT_DB
+    .prepare(`UPDATE variasi SET ${sets.join(",")} WHERE id=?`)
+    .bind(...vals).run();
+  return json({ ok: true });
+}
+
+// DELETE /api/variasi/:id
+async function variasiDelete(env, req) {
+  const id = Number(req.url.split("/").pop());
+  await env.BMT_DB.prepare(`DELETE FROM variasi WHERE id=?`).bind(id).run();
+  return json({ ok: true });
 }
 
 // ══════════════════════════════════════════════════════════════════
