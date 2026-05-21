@@ -558,10 +558,23 @@ async function stokMasuk(env, req) {
 // STOK KELUAR
 // ══════════════════════════════════════════════════════════════════
 
+
+// ── FUNGSI 1: stokKeluar ─────────────────────────────────────────
+// Tambahan: cek duplikat transaksi_id sebelum proses apapun
+// ─────────────────────────────────────────────────────────────────
 async function stokKeluar(env, req) {
   const b = await bodyJSON(req);
   if (!b || !Array.isArray(b.items) || !b.items.length)
     return json({ error: "items[] required" }, 400);
+
+  // ✅ FIX — Idempotency: tolak jika transaksi_id sudah diproses
+  if (b.transaksi_id) {
+    const dup = await env.BMT_DB
+      .prepare(`SELECT COUNT(*) AS cnt FROM stok_keluar WHERE transaksi_id=?`)
+      .bind(b.transaksi_id).first();
+    if (Number(dup?.cnt || 0) > 0)
+      return json({ ok: true, transaksi_id: b.transaksi_id, duplicate: true });
+  }
 
   const items    = mergeItems(b.items);
   const operator = b.dibuat_oleh || b.operator || "Admin";
@@ -776,6 +789,10 @@ async function servisBatal(env, req, { id }) {
   }
 }
 
+
+// ── FUNGSI 2: servisSelesai ───────────────────────────────────────
+// Tambahan: cek status sebelum proses — tolak jika bukan "ongoing"
+// ─────────────────────────────────────────────────────────────────
 async function servisSelesai(env, req, params) {
   const id          = Number(params.id);
   const b           = await bodyJSON(req) || {};
@@ -784,6 +801,10 @@ async function servisSelesai(env, req, params) {
 
   const svc = await env.BMT_DB.prepare(`SELECT * FROM servis WHERE id_servis=?`).bind(id).first();
   if (!svc) return json({ error: "servis not found" }, 404);
+
+  // ✅ FIX — Guard: tolak jika sudah selesai/batal (tab lama, webview race condition)
+  if (svc.status !== "ongoing")
+    return json({ error: `Servis sudah ${svc.status}`, status: svc.status }, 409);
 
   const core  = svc.transaksi_id.replace("SRV-", "");
   let barang  = [];
@@ -795,8 +816,9 @@ async function servisSelesai(env, req, params) {
     const qty       = Number(it.jumlah || it.qty || 0);
     if (!barang_id || qty <= 0) continue;
 
-    const row        = await env.BMT_DB.prepare(`SELECT stock FROM barang WHERE id=?`).bind(barang_id).first();
+    const row = await env.BMT_DB.prepare(`SELECT stock FROM barang WHERE id=?`).bind(barang_id).first();
     if (!row) continue;
+
     const stock_akhir = Number(row.stock || 0);
     const stock_awal  = stock_akhir + qty;
 
