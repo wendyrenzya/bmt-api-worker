@@ -3,7 +3,7 @@ export default {
     ctx.waitUntil(visualIndexAll(env));
   },
 
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url    = new URL(request.url);
     const path   = url.pathname;
     const method = request.method.toUpperCase();
@@ -40,8 +40,16 @@ export default {
       // ══════════════════════════════════════════
       // STOK (add_item.html, stok pages)
       // ══════════════════════════════════════════
-      if (path === "/api/stok_masuk"  && method === "POST") return stokMasuk(env, request);
-      if (path === "/api/stok_keluar" && method === "POST") return stokKeluar(env, request);
+      if (path === "/api/stok_masuk"  && method === "POST") {
+        const res = await stokMasuk(env, request);
+        if (res.status === 200) ctx.waitUntil(sendBadgeFCM(env));
+        return res;
+      }
+      if (path === "/api/stok_keluar" && method === "POST") {
+        const res = await stokKeluar(env, request);
+        if (res.status === 200) ctx.waitUntil(sendBadgeFCM(env));
+        return res;
+      }
       if (path === "/api/stok_keluar" && method === "GET")  return handleGetStokKeluar(request, env);
       if (path === "/api/stok_audit"  && method === "POST") return stokAudit(env, request);
       if (path === "/api/stock_track")                      return stockTrack(env);
@@ -75,7 +83,9 @@ export default {
         return servisUpdateBiaya(env, request);
       if (path.startsWith("/api/servis/selesai/")     && method === "PUT") {
         const id_servis = Number(path.split("/").pop());
-        return servisSelesai(env, request, { id: id_servis });
+        const res = await servisSelesai(env, request, { id: id_servis });
+        if (res.status === 200) ctx.waitUntil(sendBadgeFCM(env));
+        return res;
       }
       if (path.startsWith("/api/servis/batal/")       && method === "PUT") {
         const id_servis = Number(path.split("/").pop());
@@ -207,6 +217,72 @@ function corsHeaders() {
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: corsHeaders() });
+}
+
+// ── FCM Badge (data-only, no popup) ──────────────────────────────
+async function getFCMAccessToken(env) {
+  const header  = { alg: 'RS256', typ: 'JWT' };
+  const now     = Math.floor(Date.now() / 1000);
+  const payload = {
+    iss:   env.FCM_CLIENT_EMAIL,
+    scope: 'https://www.googleapis.com/auth/firebase.messaging',
+    aud:   'https://oauth2.googleapis.com/token',
+    iat:   now, exp: now + 3600,
+  };
+  const b64 = (o) => btoa(JSON.stringify(o)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'');
+  const sigInput = `${b64(header)}.${b64(payload)}`;
+  const pemBody  = env.FCM_PRIVATE_KEY
+    .replace(/-----BEGIN PRIVATE KEY-----/,'').replace(/-----END PRIVATE KEY-----/,'')
+    .replace(/\\n/g,'').replace(/\n/g,'').trim();
+  const cryptoKey = await crypto.subtle.importKey(
+    'pkcs8', Uint8Array.from(atob(pemBody), c => c.charCodeAt(0)),
+    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['sign']
+  );
+  const sig = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', cryptoKey, new TextEncoder().encode(sigInput));
+  const jwt = `${sigInput}.${btoa(String.fromCharCode(...new Uint8Array(sig))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'')}`;
+  const res = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}`,
+  });
+  const data = await res.json();
+  if (!data.access_token) throw new Error('FCM token error');
+  return data.access_token;
+}
+
+async function sendBadgeFCM(env) {
+  try {
+    if (!env.FCM_CLIENT_EMAIL || !env.FCM_PRIVATE_KEY || !env.FCM_PROJECT_ID) return;
+    const rows = await env.BMT_DB.prepare(`SELECT token FROM fcm_tokens`).all();
+    if (!rows.results.length) return;
+    const accessToken = await getFCMAccessToken(env);
+    const stale = [];
+    for (const { token } of rows.results) {
+      const res = await fetch(
+        `https://fcm.googleapis.com/v1/projects/${env.FCM_PROJECT_ID}/messages:send`,
+        {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: {
+              token,
+              data: { type: 'badge_update' },
+              webpush: { headers: { TTL: '300', Urgency: 'normal' } },
+            },
+          }),
+        }
+      );
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({}));
+        const code = e?.error?.details?.[0]?.errorCode || '';
+        if (['INVALID_ARGUMENT','NOT_FOUND'].includes(code) || res.status === 404) stale.push(token);
+      }
+    }
+    for (const token of stale)
+      await env.BMT_DB.prepare(`DELETE FROM fcm_tokens WHERE token=?`).bind(token).run();
+  } catch(e) {
+    console.error('sendBadgeFCM:', e.message);
+  }
 }
 
 async function bodyJSON(req) {
@@ -525,11 +601,12 @@ async function stokMasuk(env, req) {
     if (!it.id) continue;
 
     const old = await env.BMT_DB
-      .prepare(`SELECT stock FROM barang WHERE id=?`)
+      .prepare(`SELECT stock, nama FROM barang WHERE id=?`)
       .bind(it.id).first();
     if (!old) continue;
 
-    const newStock = Number(old.stock || 0) + Number(it.jumlah || 0);
+    const newStock   = Number(old.stock || 0) + Number(it.jumlah || 0);
+    const namaBarang = old.nama || "";
 
     await env.BMT_DB.prepare(`UPDATE barang SET stock=? WHERE id=?`).bind(newStock, it.id).run();
 
@@ -542,9 +619,6 @@ async function stokMasuk(env, req) {
       INSERT INTO stok_masuk(barang_id,jumlah,keterangan,dibuat_oleh,created_at,transaksi_id)
       VALUES (?,?,?,?,?,?)
     `).bind(it.id, it.jumlah, it.keterangan, operator, now, tid).run();
-
-    const rowBarang  = await env.BMT_DB.prepare(`SELECT nama FROM barang WHERE id=?`).bind(it.id).first();
-    const namaBarang = rowBarang?.nama || "";
 
     await env.BMT_DB.prepare(`
       INSERT INTO riwayat(tipe,barang_id,barang_nama,jumlah,harga,komisi,catatan,dibuat_oleh,created_at,transaksi_id)
@@ -585,10 +659,13 @@ async function stokKeluar(env, req) {
   for (const it of items) {
     if (!it.id) continue;
 
-    const row = await env.BMT_DB.prepare(`SELECT stock FROM barang WHERE id=?`).bind(it.id).first();
+    const row = await env.BMT_DB.prepare(`SELECT stock, nama FROM barang WHERE id=?`).bind(it.id).first();
     if (!row) continue;
 
-    const newStock = Number(row.stock||0) - Number(it.jumlah||it.qty||0);
+    const newStock    = Number(row.stock||0) - Number(it.jumlah||it.qty||0);
+    const namaBarang  = row.nama || "";
+    const displayNama = it.variasi_nama || namaBarang;
+
     await env.BMT_DB.prepare(`UPDATE barang SET stock=? WHERE id=?`).bind(newStock, it.id).run();
 
     if (!tid.startsWith("SRV-")) {
@@ -602,10 +679,6 @@ async function stokKeluar(env, req) {
       INSERT INTO stok_keluar(barang_id,jumlah,harga,dibuat_oleh,keterangan,created_at,transaksi_id,variasi_id,variasi_nama)
       VALUES (?,?,?,?,?,?,?,?,?)
     `).bind(it.id, it.jumlah||it.qty||0, it.harga||0, operator, it.keterangan||"", now, tid, it.variasi_id||null, it.variasi_nama||null).run();
-
-    const rowBarang  = await env.BMT_DB.prepare(`SELECT nama FROM barang WHERE id=?`).bind(it.id).first();
-    const namaBarang = rowBarang?.nama || "";
-    const displayNama = it.variasi_nama || namaBarang;
 
     await env.BMT_DB.prepare(`
       INSERT INTO riwayat(tipe,barang_id,barang_nama,jumlah,harga,komisi,catatan,dibuat_oleh,created_at,transaksi_id,variasi_nama)
@@ -1500,11 +1573,13 @@ async function visualIndexAll(env) {
     } catch { fail++; }
 
     if (vectors.length >= 20) {
-      for (const vec of vectors) { try { await env.VECTORIZE.upsert([vec]); } catch { ok--; fail++; } }
+      try { await env.VECTORIZE.upsert(vectors); } catch { ok -= vectors.length; fail += vectors.length; }
       vectors = [];
     }
   }
-  for (const vec of vectors) { try { await env.VECTORIZE.upsert([vec]); } catch { ok--; fail++; } }
+  if (vectors.length > 0) {
+    try { await env.VECTORIZE.upsert(vectors); } catch { ok -= vectors.length; fail += vectors.length; }
+  }
   return { ok, fail, total: products.length };
 }
 
