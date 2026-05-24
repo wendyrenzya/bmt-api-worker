@@ -92,9 +92,15 @@ export default {
         return servisBatal(env, request, { id: id_servis });
       }
       if (path.startsWith("/api/servis/charge/batal/") && method === "PUT") {
-        const id_servis = Number(path.split("/").pop());
-        return servisBatalCharge(env, id_servis);
+        const id = Number(path.split("/").pop());
+        return chargeBatal(env, id);
       }
+
+      // ── CHARGES (tabel terpisah) ──────────────────────────────
+      if (path.startsWith("/api/charges/") && method === "GET")
+        return chargesList(env, request);
+      if (path === "/api/charges" && method === "POST")
+        return chargesAdd(env, request);
       if (path.startsWith("/api/servis/update_items/") && method === "PUT")
         return servisUpdateItems(env, request);
 
@@ -407,12 +413,12 @@ async function badgesGet(env, url) {
       `SELECT COUNT(DISTINCT transaksi_id) AS cnt FROM riwayat WHERE created_at > ?`
     ).bind(lsR || now).first(),
 
-    // Ongoing: real-time, tidak pakai last_seen, exclude charge
+    // Ongoing: real-time, tidak pakai last_seen
     env.BMT_DB.prepare(
       `SELECT COUNT(*) AS cnt FROM servis WHERE status = 'ongoing' AND transaksi_id NOT LIKE 'CHG-%'`
     ).first(),
 
-    // Selesai: baru sejak last_seen, exclude charge
+    // Selesai: baru sejak last_seen
     env.BMT_DB.prepare(
       `SELECT COUNT(*) AS cnt FROM servis WHERE status = 'selesai' AND selesai_at > ? AND transaksi_id NOT LIKE 'CHG-%'`
     ).bind(lsS || now).first()
@@ -792,7 +798,7 @@ async function stockTrack(env) {
 
 async function servisList(env) {
   const rows = await env.BMT_DB
-    .prepare(`SELECT * FROM servis ORDER BY created_at DESC`)
+    .prepare(`SELECT * FROM servis WHERE transaksi_id NOT LIKE 'CHG-%' ORDER BY created_at DESC`)
     .all();
   return json({ items: rows.results || [] });
 }
@@ -802,6 +808,7 @@ async function servisToday(env) {
   const rows = await env.BMT_DB.prepare(`
     SELECT * FROM servis
     WHERE status = 'selesai'
+      AND transaksi_id NOT LIKE 'CHG-%'
       AND DATE(created_at, '+7 hours') = DATE('now', '+7 hours')
     ORDER BY created_at DESC
   `).all();
@@ -838,25 +845,20 @@ async function servisDetail(env, req) {
 
 async function servisBatal(env, req, { id }) {
   try {
-    const b     = await bodyJSON(req) || {};
+    const b      = await bodyJSON(req) || {};
     const alasan = b.alasan || "";
 
-    await env.BMT_DB.prepare(`UPDATE servis SET status='batal', alasan_batal=? WHERE id_servis=?`)
-      .bind(alasan, id).run();
+    await env.BMT_DB.prepare(
+      `UPDATE servis SET status='batal', alasan_batal=? WHERE id_servis=? AND transaksi_id NOT LIKE 'CHG-%'`
+    ).bind(alasan, id).run();
 
-    const base = await env.BMT_DB.prepare(`SELECT transaksi_id FROM servis WHERE id_servis=?`).bind(id).first();
-    if (!base?.transaksi_id) return json({ ok: true });
-
-    const core = base.transaksi_id.startsWith("SRV-") ? base.transaksi_id.substring(4) : null;
-    if (!core) return json({ ok: true });
-
-    const charges = await env.BMT_DB.prepare(`
-      SELECT id_servis FROM servis
-      WHERE transaksi_id LIKE 'CHG-%' AND transaksi_id LIKE ? AND status='ongoing'
-    `).bind('%' + core).all();
+    // Batalkan semua charges terkait dari tabel charges
+    const charges = await env.BMT_DB
+      .prepare(`SELECT id FROM charges WHERE id_servis=? AND status='ongoing'`)
+      .bind(id).all();
 
     for (const ch of (charges?.results || [])) {
-      try { await servisBatalCharge(env, ch.id_servis); } catch {}
+      try { await chargeBatal(env, ch.id); } catch {}
     }
     return json({ ok: true });
   } catch (err) {
@@ -912,24 +914,69 @@ async function servisSelesai(env, req, params) {
     VALUES (?,?,?,?,?,?,?,?,?)
   `).bind(svc.transaksi_id, "servis", 0, svc.nama_servis||"", 1, Number(svc.biaya_servis||0), svc.catatan||"", svc.dibuat_oleh||"Admin", now).run();
 
-  const charges = await env.BMT_DB.prepare(`
-    SELECT * FROM servis WHERE transaksi_id LIKE ? AND transaksi_id LIKE 'CHG-%' AND status!='batal'
-  `).bind("%" + core).all();
+  // Catat charges ke riwayat — dari tabel charges
+  const charges = await env.BMT_DB
+    .prepare(`SELECT * FROM charges WHERE id_servis=? AND status!='batal'`)
+    .bind(id).all();
 
   for (const ch of charges.results) {
     await env.BMT_DB.prepare(`
       INSERT INTO riwayat(transaksi_id,tipe,barang_id,barang_nama,jumlah,harga,catatan,dibuat_oleh,created_at)
       VALUES (?,?,?,?,?,?,?,?,?)
-    `).bind(svc.transaksi_id, "charge", 0, ch.nama_servis||"CHARGE", 1, Number(ch.biaya_servis||0), ch.catatan||"", ch.teknisi||"Admin", now).run();
+    `).bind(svc.transaksi_id, "charge", 0, ch.nama_charge||"CHARGE", 1, Number(ch.biaya||0), ch.catatan||"", svc.dibuat_oleh||"Admin", now).run();
   }
 
   return json({ ok: true });
 }
 
-async function servisBatalCharge(env, id_servis) {
-  await env.BMT_DB.prepare(`DELETE FROM servis WHERE id_servis=? AND transaksi_id LIKE 'CHG-%'`)
-    .bind(id_servis).run();
+// ── chargeBatal: update status di tabel charges ──────────────────
+async function chargeBatal(env, id) {
+  await env.BMT_DB.prepare(`UPDATE charges SET status='batal' WHERE id=?`)
+    .bind(id).run();
   return json({ ok: true });
+}
+
+// ── chargesList: GET /api/charges/:id_servis ──────────────────────
+async function chargesList(env, req) {
+  const id_servis = Number(req.url.split("/").pop());
+  if (!id_servis) return json({ error: "id_servis required" }, 400);
+  const rows = await env.BMT_DB
+    .prepare(`SELECT * FROM charges WHERE id_servis=? ORDER BY created_at ASC`)
+    .bind(id_servis).all();
+  return json({ items: rows.results || [] });
+}
+
+// ── chargesAdd: POST /api/charges ─────────────────────────────────
+// Body: { id_servis, nama_charge, biaya, catatan, dibuat_oleh }
+async function chargesAdd(env, req) {
+  const b = await bodyJSON(req);
+  if (!b || !b.id_servis || !b.nama_charge)
+    return json({ error: "id_servis & nama_charge required" }, 400);
+
+  // Cek servis masih ongoing
+  const svc = await env.BMT_DB
+    .prepare(`SELECT id_servis, transaksi_id FROM servis WHERE id_servis=? AND status='ongoing'`)
+    .bind(Number(b.id_servis)).first();
+  if (!svc) return json({ error: "Servis tidak ditemukan atau sudah selesai" }, 404);
+
+  const now = nowISO();
+  const tid = "CHG-" + makeTID();
+
+  const r = await env.BMT_DB.prepare(`
+    INSERT INTO charges(id_servis, transaksi_id, nama_charge, biaya, catatan, status, dibuat_oleh, created_at)
+    VALUES (?,?,?,?,?,?,?,?)
+  `).bind(
+    Number(b.id_servis),
+    tid,
+    b.nama_charge,
+    Number(b.biaya || 0),
+    b.catatan    || "",
+    "ongoing",
+    b.dibuat_oleh || "Admin",
+    now
+  ).run();
+
+  return json({ ok: true, id: r.lastInsertRowId, transaksi_id: tid });
 }
 
 async function servisUpdateItems(env, req) {
@@ -1025,7 +1072,7 @@ async function riwayatDetail(env, req) {
   return json({
     transaksi_id: tid,
     servis:       null,
-    charge:       [],
+    charge:       filteredRows.filter(x => x.tipe === "charge"),
     masuk:        filteredRows.filter(x => x.tipe === "masuk"),
     keluar:       filteredRows.filter(x => x.tipe === "keluar"),
     audit:        filteredRows.filter(x => x.tipe === "audit").map(x => ({ ...x, stok_lama: x.stok_lama??null, stok_baru: x.stok_baru??null })),
@@ -1271,7 +1318,7 @@ async function laporanBulanan(env, url) {
   try {
     const [pen, chg, out] = await Promise.all([
       env.BMT_DB.prepare(`SELECT IFNULL(SUM(harga*jumlah),0) AS total FROM stok_keluar WHERE DATE(created_at) BETWEEN DATE(?) AND DATE(?)`).bind(startDate, endDate).first(),
-      env.BMT_DB.prepare(`SELECT IFNULL(SUM(biaya_servis),0) AS total FROM servis WHERE transaksi_id LIKE 'CHG-%' AND status!='batal' AND DATE(created_at) BETWEEN DATE(?) AND DATE(?)`).bind(startDate, endDate).first(),
+      env.BMT_DB.prepare(`SELECT IFNULL(SUM(biaya),0) AS total FROM charges WHERE status!='batal' AND DATE(created_at) BETWEEN DATE(?) AND DATE(?)`).bind(startDate, endDate).first(),
       env.BMT_DB.prepare(`SELECT IFNULL(SUM(jumlah),0) AS total FROM pengeluaran WHERE DATE(created_at) BETWEEN DATE(?) AND DATE(?)`).bind(startDate, endDate).first()
     ]);
 
