@@ -617,9 +617,9 @@ async function stokMasuk(env, req) {
     await env.BMT_DB.prepare(`UPDATE barang SET stock=? WHERE id=?`).bind(newStock, it.id).run();
 
     await env.BMT_DB.prepare(`
-      INSERT INTO stock_track(barang_id,transaksi_id,sumber,stock_awal,qty,stock_akhir,dibuat_oleh,created_at)
-      VALUES (?,?,?,?,?,?,?,?)
-    `).bind(it.id, tid, "MASUK", Number(old.stock||0), Number(it.jumlah||0), newStock, operator, now).run();
+      INSERT INTO stock_track(barang_id,transaksi_id,sumber,stock_awal,qty,stock_akhir,dibuat_oleh,created_at,harga,nama)
+      VALUES (?,?,?,?,?,?,?,?,?,?)
+    `).bind(it.id, tid, "MASUK", Number(old.stock||0), Number(it.jumlah||0), newStock, operator, now, 0, namaBarang).run();
 
     await env.BMT_DB.prepare(`
       INSERT INTO stok_masuk(barang_id,jumlah,keterangan,dibuat_oleh,created_at,transaksi_id)
@@ -676,9 +676,9 @@ async function stokKeluar(env, req) {
 
     if (!tid.startsWith("SRV-")) {
       await env.BMT_DB.prepare(`
-        INSERT INTO stock_track(barang_id,transaksi_id,sumber,stock_awal,qty,stock_akhir,dibuat_oleh,created_at)
-        VALUES (?,?,?,?,?,?,?,?)
-      `).bind(it.id, tid, "KELUAR", Number(row.stock||0), Number(it.jumlah||it.qty||0), newStock, operator, now).run();
+        INSERT INTO stock_track(barang_id,transaksi_id,sumber,stock_awal,qty,stock_akhir,dibuat_oleh,created_at,harga,nama)
+        VALUES (?,?,?,?,?,?,?,?,?,?)
+      `).bind(it.id, tid, "KELUAR", Number(row.stock||0), Number(it.jumlah||it.qty||0), newStock, operator, now, it.harga||0, displayNama).run();
     }
 
     await env.BMT_DB.prepare(`
@@ -757,9 +757,9 @@ async function stokAudit(env, req) {
     await env.BMT_DB.prepare("UPDATE barang SET stock=? WHERE id=?").bind(stok_baru, barang_id).run();
 
     await env.BMT_DB.prepare(`
-      INSERT INTO stock_track(barang_id,transaksi_id,sumber,stock_awal,qty,stock_akhir,dibuat_oleh,created_at)
-      VALUES (?,?,?,?,?,?,?,?)
-    `).bind(barang_id, tid, "AUDIT", stok_lama, stok_baru - stok_lama, stok_baru, operator, now).run();
+      INSERT INTO stock_track(barang_id,transaksi_id,sumber,stock_awal,qty,stock_akhir,dibuat_oleh,created_at,harga,nama)
+      VALUES (?,?,?,?,?,?,?,?,?,?)
+    `).bind(barang_id, tid, "AUDIT", stok_lama, stok_baru - stok_lama, stok_baru, operator, now, 0, namaBarang).run();
 
     await env.BMT_DB.prepare(`
       INSERT INTO stok_audit(barang_id,stok_lama,stok_baru,keterangan,dibuat_oleh,created_at,transaksi_id)
@@ -780,9 +780,9 @@ async function stockTrack(env) {
     const rows = await env.BMT_DB.prepare(`
       SELECT st.id, st.barang_id, st.transaksi_id, st.sumber,
              st.stock_awal, st.qty, st.stock_akhir, st.dibuat_oleh,
-             st.created_at, b.nama AS nama_barang
+             st.created_at, st.harga AS harga_transaksi,
+             st.nama AS nama_barang
       FROM stock_track st
-      LEFT JOIN barang b ON b.id = st.barang_id
       ORDER BY st.id DESC
       LIMIT 200
     `).all();
@@ -893,16 +893,17 @@ async function servisSelesai(env, req, params) {
     const qty       = Number(it.jumlah || it.qty || 0);
     if (!barang_id || qty <= 0) continue;
 
-    const row = await env.BMT_DB.prepare(`SELECT stock FROM barang WHERE id=?`).bind(barang_id).first();
+    const row = await env.BMT_DB.prepare(`SELECT stock, nama FROM barang WHERE id=?`).bind(barang_id).first();
     if (!row) continue;
 
-    const stock_akhir = Number(row.stock || 0);
-    const stock_awal  = stock_akhir + qty;
+    const stock_akhir  = Number(row.stock || 0);
+    const stock_awal   = stock_akhir + qty;
+    const namaServis   = it.variasi_nama || row.nama || "";
 
     await env.BMT_DB.prepare(`
-      INSERT INTO stock_track(barang_id,transaksi_id,sumber,stock_awal,qty,stock_akhir,dibuat_oleh,created_at)
-      VALUES (?,?,?,?,?,?,?,?)
-    `).bind(barang_id, svc.transaksi_id, "SERVIS", stock_awal, qty, stock_akhir, selesaiOleh, now).run();
+      INSERT INTO stock_track(barang_id,transaksi_id,sumber,stock_awal,qty,stock_akhir,dibuat_oleh,created_at,harga,nama)
+      VALUES (?,?,?,?,?,?,?,?,?,?)
+    `).bind(barang_id, svc.transaksi_id, "SERVIS", stock_awal, qty, stock_akhir, selesaiOleh, now, Number(it.harga||0), namaServis).run();
   }
 
   await env.BMT_DB.prepare(`
