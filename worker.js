@@ -97,6 +97,8 @@ export default {
       }
 
       // ── CHARGES (tabel terpisah) ──────────────────────────────
+      // FIX: Bulk charges — 1 request untuk banyak id_servis sekaligus
+      if (path === "/api/charges/bulk" && method === "GET") return chargesBulk(env, url);
       if (path.startsWith("/api/charges/") && method === "GET")
         return chargesList(env, request);
       if (path === "/api/charges" && method === "POST")
@@ -104,7 +106,7 @@ export default {
       if (path.startsWith("/api/servis/update_items/") && method === "PUT")
         return servisUpdateItems(env, request);
 
-      if (path === "/api/servis"       && method === "GET")  return servisList(env);
+      if (path === "/api/servis"       && method === "GET")  return servisList(env, url);
       if (path === "/api/servis"       && method === "POST") return servisAdd(env, request);
       if (path === "/api/servis/today" && method === "GET")  return servisToday(env);
       if (path.startsWith("/api/servis/") && method === "GET")
@@ -262,30 +264,38 @@ async function sendBadgeFCM(env) {
     const rows = await env.BMT_DB.prepare(`SELECT token FROM fcm_tokens`).all();
     if (!rows.results.length) return;
     const accessToken = await getFCMAccessToken(env);
-    const stale = [];
-    for (const { token } of rows.results) {
-      const res = await fetch(
-        `https://fcm.googleapis.com/v1/projects/${env.FCM_PROJECT_ID}/messages:send`,
-        {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            message: {
-              token,
-              data: { type: 'badge_update' },
-              webpush: { headers: { TTL: '300', Urgency: 'normal' } },
-            },
-          }),
+
+    // FIX: kirim semua token paralel — bukan satu per satu (serial)
+    const results = await Promise.all(
+      rows.results.map(async ({ token }) => {
+        const res = await fetch(
+          `https://fcm.googleapis.com/v1/projects/${env.FCM_PROJECT_ID}/messages:send`,
+          {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              message: {
+                token,
+                data: { type: 'badge_update' },
+                webpush: { headers: { TTL: '300', Urgency: 'normal' } },
+              },
+            }),
+          }
+        );
+        if (!res.ok) {
+          const e = await res.json().catch(() => ({}));
+          const code = e?.error?.details?.[0]?.errorCode || '';
+          if (['INVALID_ARGUMENT','NOT_FOUND'].includes(code) || res.status === 404) return token;
         }
-      );
-      if (!res.ok) {
-        const e = await res.json().catch(() => ({}));
-        const code = e?.error?.details?.[0]?.errorCode || '';
-        if (['INVALID_ARGUMENT','NOT_FOUND'].includes(code) || res.status === 404) stale.push(token);
-      }
-    }
-    for (const token of stale)
-      await env.BMT_DB.prepare(`DELETE FROM fcm_tokens WHERE token=?`).bind(token).run();
+        return null;
+      })
+    );
+
+    const stale = results.filter(Boolean);
+    // Hapus token stale paralel juga
+    await Promise.all(
+      stale.map(token => env.BMT_DB.prepare(`DELETE FROM fcm_tokens WHERE token=?`).bind(token).run())
+    );
   } catch(e) {
     console.error('sendBadgeFCM:', e.message);
   }
@@ -603,13 +613,12 @@ async function stokMasuk(env, req) {
   const now      = nowISO();
   const tid      = "MSK-" + makeTID();
 
-  for (const it of items) {
-    if (!it.id) continue;
-
+  // FIX: proses semua item paralel — bukan serial satu per satu
+  await Promise.all(items.filter(it => it.id).map(async it => {
     const old = await env.BMT_DB
       .prepare(`SELECT stock, nama FROM barang WHERE id=?`)
       .bind(it.id).first();
-    if (!old) continue;
+    if (!old) return;
 
     const newStock   = Number(old.stock || 0) + Number(it.jumlah || 0);
     const namaBarang = old.nama || "";
@@ -630,7 +639,7 @@ async function stokMasuk(env, req) {
       INSERT INTO riwayat(tipe,barang_id,barang_nama,jumlah,harga,komisi,catatan,dibuat_oleh,created_at,transaksi_id)
       VALUES (?,?,?,?,?,?,?,?,?,?)
     `).bind("masuk", it.id, namaBarang, it.jumlah, 0, 0, it.keterangan||"", operator, now, tid).run();
-  }
+  }));
 
   return json({ ok: true, transaksi_id: tid });
 }
@@ -796,10 +805,14 @@ async function stockTrack(env) {
 // SERVIS
 // ══════════════════════════════════════════════════════════════════
 
-async function servisList(env) {
+async function servisList(env, url) {
+  // FIX: support pagination — tanpa ini semua data dimuat sekaligus
+  const limit  = Math.min(Number(url?.searchParams?.get("limit")  || 10), 100);
+  const offset = Number(url?.searchParams?.get("offset") || 0);
+
   const rows = await env.BMT_DB
-    .prepare(`SELECT * FROM servis WHERE transaksi_id NOT LIKE 'CHG-%' ORDER BY created_at DESC`)
-    .all();
+    .prepare(`SELECT * FROM servis WHERE transaksi_id NOT LIKE 'CHG-%' ORDER BY created_at DESC LIMIT ? OFFSET ?`)
+    .bind(limit, offset).all();
   return json({ items: rows.results || [] });
 }
 
@@ -947,6 +960,30 @@ async function chargesList(env, req) {
   return json({ items: rows.results || [] });
 }
 
+
+// ── chargesBulk: GET /api/charges/bulk?ids=1,2,3 ─────────────────
+// FIX: Mengganti N request individual menjadi 1 query bulk
+async function chargesBulk(env, url) {
+  const idsParam = url.searchParams.get("ids") || "";
+  if (!idsParam) return json({});
+  const ids = idsParam.split(",").map(Number).filter(Boolean);
+  if (!ids.length) return json({});
+
+  // Bangun placeholders: ?,?,?
+  const placeholders = ids.map(() => "?").join(",");
+  const rows = await env.BMT_DB
+    .prepare(`SELECT * FROM charges WHERE id_servis IN (${placeholders}) AND status != 'batal' ORDER BY created_at ASC`)
+    .bind(...ids).all();
+
+  // Kelompokkan per id_servis
+  const result = {};
+  for (const row of (rows.results || [])) {
+    const key = row.id_servis;
+    if (!result[key]) result[key] = [];
+    result[key].push(row);
+  }
+  return json(result);
+}
 // ── chargesAdd: POST /api/charges ─────────────────────────────────
 // Body: { id_servis, nama_charge, biaya, catatan, dibuat_oleh }
 async function chargesAdd(env, req) {
